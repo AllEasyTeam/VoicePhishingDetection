@@ -12,7 +12,8 @@
 ├── README.md
 ├── Structure.md                
 └── Simulator/
-    ├── main.py                 
+    ├── main.py 
+    ├── schema.py              
     ├── Generation/
     │   ├── config.py            
     │   ├── normal_generator.py  
@@ -48,6 +49,12 @@
 - 최종 모드: 팀이 확정한 값으로 데이터셋 1개 생성 → 학습 → 최종 성능 출력
 
 주의: `main.py`는 `Generation/config.py`를 직접 import해도 됨(생성 단계를 총괄 지휘하는 역할이기 때문). 문제가 되는 건 `Detection/` 내부 코드가 config를 보는 것이므로 `main.py`에서는 고려하지 않아도 됨.
+
+---
+
+### 'Simulator/schema.py
+
+역할: Dataset의 column 정의를 위한 class 선언 파일.
 
 ---
 
