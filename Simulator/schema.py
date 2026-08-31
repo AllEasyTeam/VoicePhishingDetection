@@ -1,3 +1,9 @@
+"""
+schema.py - column schema 정의
+
+역할: Track 종류(통신사, 단말...), column 값의 형태(이진, 텍스트...), ColumnSchema class 정의.
+
+"""
 from typing import List, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -28,7 +34,7 @@ class ColumnSchema:
     track: Track
     is_feature: bool = True # False라면 학습 시 제외.(phone_number)
     nullable: bool = False # 결측 가능 여부(True라면 결측 가능한 column)
-    depends_on: Optional[str] = None
+    depends_on: Optional[str] = None # 결측 규칙 설명. (nullable=True일 때 설명 필요 및 결측 규칙 명시적 확인을 위한 용도)
 
 
     def validate(self) -> List[str]:
@@ -36,6 +42,7 @@ class ColumnSchema:
         errors = []
         if self.nullable and self.depends_on is None:
             errors.append(f"{self.name}: nullable인데 depends_on 설명이 없음")
+            # 결측 규칙이 명시되지 않은 column이므로 오류로 간주. 
         if not self.is_feature and self.nullable:
-            errors.append(f"{self.name}: ID column은 결측 규칙 불필요")
+            errors.append(f"{self.name}: feature가 아닌 column은 결측 규칙 불필요")
         return errors
