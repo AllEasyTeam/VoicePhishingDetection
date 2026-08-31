@@ -1,7 +1,8 @@
 # 완성된 dataset 만드는 파일.
 import random
+import numpy as np
 import pandas as pd
-from typing import Union, Dict
+from typing import Union, Dict, Optional
 
 from Simulator.Generation.normal_generator import generate_normal_event
 from Simulator.Generation.phishing_generator import generate_phishing_event
@@ -11,7 +12,8 @@ def build_dataset(
     phishing_rate: float, 
     config, 
     sophistication: Union[str, Dict[str, str]] = "중간", 
-    subgroup_ratio_key: str = "B"
+    subgroup_ratio_key: str = "B",
+    random_state: Optional[int] = None
 ) -> pd.DataFrame:
     """
     Algorithm 1 전체 의사 코드를 1:1로 구현한 데이터셋 생성 함수
@@ -22,7 +24,11 @@ def build_dataset(
     - config: Generation/config.py 설정 모듈
     - sophistication: 값-옵션 선택 ('짧게'/'중간'/'길게' 또는 feature별 dict)
     - subgroup_ratio_key: 하위집단 지인:기관 비율 키 ('A'~'E')
+    - random_state: 재현성을 위한 난수 시드값
     """
+    if random_state is not None:
+        random.seed(random_state)
+        np.random.seed(random_state)
     # 1: dataset <- 빈 리스트
     dataset = []
 
@@ -33,8 +39,10 @@ def build_dataset(
     total_weight = sum(type_weights)
     norm_weights = [w / total_weight for w in type_weights]
 
-    # 지인:기관 비중 기준값 (config.지인기관_비중_후보)
-    p_acquaintance = config.지인기관_비중_후보[subgroup_ratio_key]
+    # 하위집단(지인 / 기관_개인 / 기관_기업) 비중 설정 (config.관계유형_비중_후보 기준)
+    subgroup_dict = config.관계유형_비중_후보[subgroup_ratio_key]
+    subgroup_names = list(subgroup_dict.keys())
+    subgroup_weights = list(subgroup_dict.values())
 
     # 2: for i in range(n):
     for i in range(n):
@@ -54,8 +62,9 @@ def build_dataset(
             )
         # 8: else:
         else:
-            # 9: subgroup <- 지인/기관 확률적 선택 (config.지인기관_비중 기준)
-            subgroup = "지인" if random.random() < p_acquaintance else "기관"
+            # 9: subgroup <- 하위집단 확률적 선택 (지인, 기관_개인, 기관_기업)
+            subgroup = random.choices(subgroup_names, weights=subgroup_weights)[0]
+            
             # 10: event <- generate_normal_event(subgroup, config)
             event = generate_normal_event(
                 subgroup=subgroup, 
@@ -81,25 +90,31 @@ def build_dataset(
 
     # 18: return dataset (DataFrame 변환 및 셔플링)
     df = pd.DataFrame(dataset)
-    return df.sample(frac=1.0).reset_index(drop=True)
+    return df.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
 
 #소량 생성 검증용 테스트 코드. 추후 삭제
 if __name__ == "__main__":
     import sys
     from pathlib import Path
 
-    # 상위 경로 모듈 참조 처리 (단독 실행 지원)
-    sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from Generation import config
-
+    # 단독 실행 시 상위 패키지 경로 탐색 보정
+    current_dir = Path(__file__).resolve().parent
+    project_root = current_dir.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+        
+    from Simulator.Generation import config
+    
     # 1. 20건 생성 (검증을 위해 피싱 비율을 30%로 상향 설정)
+    sample_size = 20
     sample_size = 20
     df_sample = build_dataset(
         n=sample_size, 
         phishing_rate=0.3, 
         config=config, 
         sophistication="중간", 
-        subgroup_ratio_key="B"
+        subgroup_ratio_key="B",
+        random_state=42
     )
 
     # ------------------------------------------------------------
@@ -137,7 +152,10 @@ if __name__ == "__main__":
     rule1_url = (df_sample[df_sample["is_url_in_msg"] == 0][["is_reliable_url", "has_appinstall_link"]].isna()).all().all()
 
     # 규칙 3: 항상 관측되어야 하는 컬럼 검증
-    always_observed_cols = ["phone_number", "number_type", "call_time", "call_type", "hour_bucket", "first_contact_type", "in_contacts", "is_global"]
+    always_observed_cols = [
+        "phone_number", "number_type", "call_time", "call_type", 
+        "hour_bucket", "first_contact_type", "in_contacts", "is_global"
+    ]
     rule3_check = (df_sample[always_observed_cols].isna().sum().sum() == 0)
 
     # 규칙 4: Track A 전용 컬럼 (전부 NaN이어야 함)
