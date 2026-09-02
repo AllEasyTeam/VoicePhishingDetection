@@ -8,7 +8,7 @@ phone_number이 is_feature = False인 이유: 학습 시 전화번호를 통째�
 call_time이 is_feature = False인 이유: 학습 시 call_time으로 얻은 hour_bucket을 사용하기 때문. (중복 방지)
 """
 
-from schema import ColumnSchema, ValueType, Track
+from Simulator.schema import ColumnSchema, ValueType, Track
 
 SCHEMA: list[ColumnSchema] = [
     ColumnSchema("phone_number", "전화번호", ValueType.TEXT, Track.ID, is_feature=False), # is_feature = False -> 학습 시 제외.

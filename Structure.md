@@ -13,7 +13,9 @@
 ├── Structure.md                
 └── Simulator/
     ├── main.py 
-    ├── schema.py              
+    ├── schema.py
+    ├── schema_columns.py
+    ├── schema_utils.py              
     ├── Generation/
     │   ├── config.py            
     │   ├── normal_generator.py  
@@ -55,6 +57,18 @@
 ### 'Simulator/schema.py
 
 역할: Dataset의 column 정의를 위한 class 선언 파일.
+
+---
+
+### 'Simulator/schema_columns.py
+
+역할: 실제 Dataset에 필요한 column 목록을 생성하는 파일.
+
+---
+
+### 'Simulator/schema_utils.py
+
+역할: 다른 file에서 schema 관련 함수를 사용할 수 있도록 관련 함수를 정의한 파일.
 
 ---
 
