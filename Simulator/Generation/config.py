@@ -158,14 +158,6 @@ WHITELIST_NUMS=[
 WHITELIST_SET = {normalize(item["번호"])  for item in WHITELIST_NUMS}
 
 B_GROUP = {
-    # 실측 - 스윕 불필요, 고정값
-    "번호_개통처": {
-        "SKT": 0.390,
-        "KT": 0.233,
-        "LGU+": 0.195,
-        "MVNO": 0.182,
-    },
-
     # 논리(자명) - 사기범이 못 흉내내는 부분, 고정값
     "URL_공식도메인_비율": 1.0,
 
