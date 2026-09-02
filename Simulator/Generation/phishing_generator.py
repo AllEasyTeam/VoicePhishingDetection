@@ -10,7 +10,7 @@ def _get_soph(soph: Union[str, Dict[str, str]], key: str) -> str:
 
 def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, str]], config) -> dict:
     """
-    피싱 유형(대출/기관/지인사칭/협박)에 따른 차등 θ값을 적용하여 이벤트 1건 생성
+    피싱 유형(대출/기관/지인사칭/기타)에 따른 차등 θ값을 적용하여 이벤트 1건 생성
     """
     # 1. 식별자 및 발신 번호 생성
     if p_type == "지인사칭형":

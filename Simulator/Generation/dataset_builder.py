@@ -32,7 +32,8 @@ def build_dataset(
     # 1: dataset <- 빈 리스트
     dataset = []
 
-    # 피싱 유형 비율 정규화 (config.TYPE_RATIO 기준)
+    # 보이스피싱 유형(대출사기형, 기관사칭형, 지인사칭형, 기타) 비율 정규화 (config.TYPE_RATIO 기준)
+    # total_weight이 1이 아닐 때, norm_weights 계산하여 비율 유지하면서 정규화하기 위한 과정.
     valid_types = {k: v for k, v in config.TYPE_RATIO.items() if v is not None}
     type_names = list(valid_types.keys())
     type_weights = list(valid_types.values())
@@ -46,49 +47,46 @@ def build_dataset(
 
     # 2: for i in range(n):
     for i in range(n):
-        # 3: is_phishing <- random() < phishing_rate
+        # 3: 이번 사건이 피싱/정상인지 확률적 결정 (클래스 불균형 비율보다 작아야 함.)
+        # is_phishing이 phishing_rate보다 작으면 True(이번 사건은 피싱), 아니면 False(이번 사건은 정상) -> 매 사건마다 독립적으로 계산.
         is_phishing = random.random() < phishing_rate
 
-        # 4: if is_phishing:
+        # 4: 이번 사건이 피싱 사건인 경우
         if is_phishing:
-            # 5: type <- 유형 4종 중 확률적 선택 (config.TYPE_RATIO 기준)
+            # 5: type <- 피싱 유형 4종 중 확률적 선택 (config.TYPE_RATIO 기준)
             p_type = random.choices(type_names, weights=norm_weights)[0]
             # 6: sophistication <- 값-옵션 선택 (외부 인자 반영)
-            # 7: event <- generate_phishing_event(type, sophistication, config)
+            # 7: generate_phishing_event(피싱 유형, sophistication, config) 호출 -> 피싱 event 생성
             event = generate_phishing_event(
                 p_type=p_type,
                 sophistication=sophistication, 
                 config=config
             )
-        # 8: else:
+        # 8: 이번 사건이 정상 사건인 경우
         else:
             # 9: subgroup <- 하위집단 확률적 선택 (지인, 기관_개인, 기관_기업)
             subgroup = random.choices(subgroup_names, weights=subgroup_weights)[0]
             
-            # 10: event <- generate_normal_event(subgroup, config)
+            # 10: generate_normal_event(하위집단, config, sophistication) 호출 -> 정상 event 생성
             event = generate_normal_event(
                 subgroup=subgroup, 
                 config=config, 
                 sophistication=sophistication
             )
-        # 11: end if
 
-        # 12: event.피싱여부 <- is_phishing ? 1 : 0
+        # 11: event는 dict. is_phishing이 True(=피싱 사건), False(=정상 사건) 여부에 따라 "is_phishing" key, value 새로 추가.
         event["is_phishing"] = 1 if is_phishing else 0
 
-        # 13: if is_phishing:
-        # 14:     event.유형라벨 <- type
-        # 15: end if
+        # 12: event는 dict. is_phishing 값에 따라서, "incident_type" key, value 추가. (피싱 사건이면 피싱 유형) 
         if is_phishing:
             event["incident_type"] = p_type
         else:
             event["incident_type"] = "정상"
 
-        # 16: dataset.append(event)
+        # 13: dataset에 event 추가.
         dataset.append(event)
-    # 17: end for
 
-    # 18: return dataset (DataFrame 변환 및 셔플링)
+    # 14: return dataset (DataFrame 변환 및 셔플링-dataset 생성에서 순서 의존성 차단 목적)
     df = pd.DataFrame(dataset)
     return df.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
 
@@ -105,8 +103,7 @@ if __name__ == "__main__":
         
     from Simulator.Generation import config
     
-    # 1. 20건 생성 (검증을 위해 피싱 비율을 30%로 상향 설정)
-    sample_size = 20
+    # 1. 20건 생성 (검증을 위해 피싱 비율을 임의로 상향 설정)
     sample_size = 20
     df_sample = build_dataset(
         n=sample_size, 
