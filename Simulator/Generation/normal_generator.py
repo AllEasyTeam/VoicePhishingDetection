@@ -5,8 +5,37 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Union, Dict
 
+_AREA_CODES = [
+    "031", "032", "033", "041", "042", "043", "044",
+    "051", "052", "053", "054", "055", "061", "062", "063", "064",
+]
+
+
 def _get_soph(soph: Union[str, Dict[str, str]], key: str) -> str:
     return soph.get(key, "중간") if isinstance(soph, dict) else soph
+
+
+def _digits(n: int) -> str:
+    return "".join(str(random.randint(0, 9)) for _ in range(n))
+
+
+def _generate_org_phone() -> str:
+    """기관용 합성 번호. 이미지 허용 형식(유선/특번/070/0N0/국제)만 사용."""
+    kind = random.choice(["특번", "02", "지역", "070", "0N0", "국제"])
+    if kind == "특번":  # 15XX/16XX/18XX, 총 8자리, 지역번호 없음
+        return random.choice(["15", "16", "18"]) + _digits(6)
+    if kind == "02":  # 02 + 7~8자리 (국번 선행 0 금지 → 020 혼동 방지)
+        return "02" + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
+    if kind == "지역":  # 031-YYY-YYYY 등, 총 10~11자리
+        return random.choice(_AREA_CODES) + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
+    if kind == "070":  # 인터넷전화, 총 8~11자리
+        return "070" + _digits(random.randint(5, 8))
+    if kind == "0N0":  # 060/080(8~11), 030/050(최대12). 020/040/090 금지
+        prefix = random.choice(["060", "080", "030", "050"])
+        max_total = 12 if prefix in ("030", "050") else 11
+        return prefix + _digits(random.randint(5, max_total - 3))
+    return "00" + _digits(random.randint(8, 12))  # 00X(국제)
+
 
 def _calculate_repeat_gap(subgroup: str, config, sophistication: Union[str, Dict[str, str]]) -> float:
     """config.REPEAT_CONTACT 세부 혼합분포를 적용하여 재연락 간격(분) 계산(임시)"""
@@ -34,14 +63,14 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
     """
     # 1. 식별자 및 발신 대역 (Track B)
     if subgroup == "지인":
-        phone_number = f"010{random.randint(10000000, 99999999)}"
+        phone_number = "010" + _digits(8)  # 이동통신: 총 11자리
     else:
-        # 기관_개인 / 기관_기업: 화이트리스트 대표번호 또는 일반 유선번호
+        # 기관_개인 / 기관_기업: 화이트리스트 우선, 아니면 허용 형식 합성
         if random.random() < 0.85:
             phone_number = random.choice(list(config.WHITELIST_SET))
         else:
-            phone_number = f"02{random.randint(1000000, 9999999)}"
-            
+            phone_number = _generate_org_phone()
+
     # 번호 대역 표준화 분류
     number_type = config.classify_number_type(phone_number)
     is_global = 1 if number_type == "00X(국제)" else 0

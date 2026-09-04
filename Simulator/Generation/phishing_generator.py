@@ -5,36 +5,98 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Union, Dict
 
+_AREA_CODES = [
+    "031", "032", "033", "041", "042", "043", "044",
+    "051", "052", "053", "054", "055", "061", "062", "063", "064",
+]
+
+# config.PHISHING_통화_발신번호_종류_대역 미러 (config 미수정 전제)
+_CALL_BAND = {
+    "010": {"짧게": 0.40, "중간": 0.55, "길게": 0.70},
+    "특번(1566등)": {"짧게": 0.15, "중간": 0.25, "길게": 0.35},
+    "070/기타": {"짧게": 0.05, "중간": 0.20, "길게": 0.35},
+}
+
+# config.PHISHING_문자_발신번호_종류_대역 미러
+# 지인사칭형만 고유 비중, 나머지는 통화 대역 차용
+_SMS_BAND_지인사칭 = {"010": 0.99, "기타": 0.01}
+
+
 def _get_soph(soph: Union[str, Dict[str, str]], key: str) -> str:
     return soph.get(key, "중간") if isinstance(soph, dict) else soph
+
+
+def _digits(n: int) -> str:
+    return "".join(str(random.randint(0, 9)) for _ in range(n))
+
+
+def _generate_other_phone() -> str:
+    """070/기타·기타 대역: 유선/특번/070/0N0/국제 (이미지 허용 형식)"""
+    kind = random.choice(["특번", "02", "지역", "070", "0N0", "국제"])
+    if kind == "특번":
+        return random.choice(["15", "16", "18"]) + _digits(6)
+    if kind == "02":
+        return "02" + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
+    if kind == "지역":
+        return random.choice(_AREA_CODES) + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
+    if kind == "070":
+        return "070" + _digits(random.randint(5, 8))
+    if kind == "0N0":
+        prefix = random.choice(["060", "080", "030", "050"])
+        max_total = 12 if prefix in ("030", "050") else 11
+        return prefix + _digits(random.randint(5, max_total - 3))
+    return "00" + _digits(random.randint(8, 12))
+
+
+def _phone_from_kind(kind: str) -> str:
+    if kind == "010":
+        return "010" + _digits(8)
+    if kind.startswith("특번"):
+        return random.choice(["15", "16", "18"]) + _digits(6)
+    return _generate_other_phone()  # 070/기타, 기타
+
+
+def _pick_call_kind(soph: str) -> str:
+    cats = list(_CALL_BAND.keys())
+    return random.choices(cats, weights=[_CALL_BAND[c][soph] for c in cats])[0]
+
+
+def _generate_phishing_phone(
+    p_type: str,
+    first_contact_type: str,
+    sophistication: Union[str, Dict[str, str]],
+) -> str:
+    """문자/통화 대역에 따라 피싱 발신번호 생성."""
+    soph = _get_soph(sophistication, "발신번호_종류_대역")
+    if soph not in ("짧게", "중간", "길게"):
+        soph = "중간"
+
+    if first_contact_type == "sms" and p_type == "지인사칭형":
+        kind = random.choices(
+            list(_SMS_BAND_지인사칭.keys()),
+            weights=list(_SMS_BAND_지인사칭.values()),
+        )[0]
+    else:
+        # 통화 대역, 또는 문자인데 통화 대역 차용(기관/대출/기타)
+        kind = _pick_call_kind(soph)
+    return _phone_from_kind(kind)
+
 
 def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, str]], config) -> dict:
     """
     피싱 유형(대출/기관/지인사칭/기타)에 따른 차등 θ값을 적용하여 이벤트 1건 생성
     """
-    # 1. 식별자 및 발신 번호 생성
-    if p_type == "지인사칭형":
-        # 지인 사칭은 주로 010 개인 번호 형태
-        number_type = "010"
-        phone_number = f"010{random.randint(10000000, 99999999)}"
-        is_global = 0
-    elif p_type == "기관사칭형":
-        # 기관 사칭은 02(서울) 또는 070, 국제발신
-        number_type = random.choices(["02", "070", "010"], weights=[0.4, 0.4, 0.2])[0]
-        phone_number = f"02{random.randint(1000000, 9999999)}" if number_type == "02" else f"070{random.randint(10000000, 99999999)}"
-        is_global = 1 if random.random() < 0.25 else 0
-    else:  # 대출사기형, 협박형
-        number_type = random.choices(["070", "010", "1588_변작"], weights=[0.6, 0.3, 0.1])[0]
-        phone_number = f"070{random.randint(10000000, 99999999)}"
-        is_global = 1 if random.random() < 0.15 else 0
+    # 1. 개시 채널 → 발신번호 (문자/통화 대역이 채널에 의존)
+    first_contact_type = "sms" if p_type in ["대출사기형", "지인사칭형"] else random.choice(["call", "sms"])
+    phone_number = _generate_phishing_phone(p_type, first_contact_type, sophistication)
+    number_type = config.classify_number_type(phone_number)
+    is_global = 1 if number_type == "00X(국제)" else 0
 
     # 2. 통화/문자 시간 및 기본 속성 (규칙 3: 항상 관측)
     base_time = datetime(2026, 1, 1) + timedelta(minutes=random.randint(0, 525600))
     call_time = base_time.strftime("%Y-%m-%d %H:%M:%S")
     hour_bucket = base_time.hour
     call_type = 1  # 수신 (피해자 단말 관점)
-    
-    first_contact_type = "sms" if p_type in ["대출사기형", "지인사칭형"] else random.choice(["call", "sms"])
 
     # 3. 저장 및 과거 이력
     in_contacts = 0
