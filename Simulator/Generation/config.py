@@ -30,6 +30,17 @@ ETC = "etc" # 기타
 # ============================================================
 LOW, MID, HIGH = "low", "mid", "high" # 짧게/중간/길게
 
+# ============================================================
+# 하위 그룹(정상값) 관련 상수 선언
+# 지인/기관 , 개인/기업
+# ============================================================
+SUBGROUP_ACQUAINTANCE = "subgroup_acquaintance"     # 지인 
+SUBGROUP_INSTITUTION = "subgroup_institution"       # 기관 
+SUBGROUP_PERSONAL = "subgroup_personal"             # 개인
+SUBGROUP_CORPORATE = "subgroup_corporate"           # 기업
+SUBGROUP_INSTITUTION_PERSONAL = "subgroup_institution_personal"  # 기관_개인
+SUBGROUP_INSTITUTION_CORPORATE = "subgroup_institution_corporate" # 기관_기업
+
 
 
 # 전화번호 비교할 때 사용할 함수
@@ -181,11 +192,11 @@ TYPE_RATIO = {
 # 하위집단 비중 (지인:기관 / 개인:기업 연동)
 # ============================================================
 RELATION_TYPE_RATIO = {
-    "A": {"지인": 0.90, "기관_개인": 0.05, "기관_기업": 0.05},
-    "B": {"지인": 0.70, "기관_개인": 0.15, "기관_기업": 0.15},
-    "C": {"지인": 0.50, "기관_개인": 0.25, "기관_기업": 0.25},
-    "D": {"지인": 0.30, "기관_개인": 0.35, "기관_기업": 0.35},
-    "E": {"지인": 0.10, "기관_개인": 0.45, "기관_기업": 0.45},
+    "A": {SUBGROUP_ACQUAINTANCE: 0.90, SUBGROUP_INSTITUTION_PERSONAL: 0.05, SUBGROUP_INSTITUTION_CORPORATE: 0.05},
+    "B": {SUBGROUP_ACQUAINTANCE: 0.70, SUBGROUP_INSTITUTION_PERSONAL: 0.15, SUBGROUP_INSTITUTION_CORPORATE: 0.15},
+    "C": {SUBGROUP_ACQUAINTANCE: 0.50, SUBGROUP_INSTITUTION_PERSONAL: 0.25, SUBGROUP_INSTITUTION_CORPORATE: 0.25},
+    "D": {SUBGROUP_ACQUAINTANCE: 0.30, SUBGROUP_INSTITUTION_PERSONAL: 0.35, SUBGROUP_INSTITUTION_CORPORATE: 0.35},
+    "E": {SUBGROUP_ACQUAINTANCE: 0.10, SUBGROUP_INSTITUTION_PERSONAL: 0.45, SUBGROUP_INSTITUTION_CORPORATE: 0.45},
 }
 
 
@@ -290,24 +301,19 @@ NORMAL_NUMBER_TYPE = {
 }
 
 PHISHING_CALL_NUMBER_TYPE = {
-    "010": {LOW: 0.40, MID: 0.55, HIGH: 0.70},
-    "특번(1566등)": {LOW: 0.15, MID: 0.25, HIGH: 0.35},
-    "070/기타": {LOW: 0.05, MID: 0.20, HIGH: 0.35},
+    "010": {LOW: 0.40,   MID: 0.55,   HIGH: 0.65},
+    "특번": {LOW: 0.15,   MID: 0.20,   HIGH: 0.25},
+    "02(유선)": {LOW: 0.1125, MID: 0.0625, HIGH: 0.025},
+    "070(인터넷전화)": {LOW: 0.1125, MID: 0.0625, HIGH: 0.025},
+    "00X(국제)": {LOW: 0.1125, MID: 0.0625, HIGH: 0.025},
+    "기타": {LOW: 0.1125, MID: 0.0625, HIGH: 0.025},
 }
 
 PHISHING_SMS_NUMBER_TYPE = {
-    ACQUAINTANCE: {
-        "문자": {"010": 0.99, "기타": 0.01},  # 확정(n=1218)
-    },
-    INSTITUTION: {
-        "문자": PHISHING_CALL_NUMBER_TYPE,  # 차용값
-    },
-    LOAN: {
-        "문자": PHISHING_CALL_NUMBER_TYPE,  # 차용값
-    },
-    ETC: {
-        "문자": PHISHING_CALL_NUMBER_TYPE,  # 차용값
-    },
+    ACQUAINTANCE: {"010": 0.99, "기타": 0.01},  # 확정(n=1218)
+    INSTITUTION: PHISHING_CALL_NUMBER_TYPE,  # 차용값
+    LOAN: PHISHING_CALL_NUMBER_TYPE,  # 차용값
+    ETC: PHISHING_CALL_NUMBER_TYPE,  # 차용값
 }
 
 
@@ -333,9 +339,10 @@ NORMAL_SMS_TO_CALL_GAP = {
 }
 
 PHISHING_SMS_TO_CALL_GAP = {
-    "문자통화_전환간격_기관사칭형": 2077,  # theta(분)
-    "문자통화_전환간격_대출사기형": 27007,  # theta(분)
-    "문자통화_전환간격_지인기타": 2077,  # theta(분)
+    INSTITUTION: 2077,  # theta(분)
+    LOAN: 27007,  # theta(분)
+    ACQUAINTANCE: 2077,  # theta(분)
+    ETC: 2077,  # theta(분)
 }
 
 
@@ -343,12 +350,12 @@ PHISHING_SMS_TO_CALL_GAP = {
 # 재연락_간격
 # ============================================================
 NORMAL_REPEAT_GAP = {
-    "지인": {
+    SUBGROUP_ACQUAINTANCE: {
         "theta_list": [7.5, 45, 180, 1080],   # 5~10분/30~60분/3시간/반나절~하루 대표값
         "p_list": [0.2, 0.3, 0.3, 0.2],
         "배율": {LOW: 0.5, MID: 1.0, HIGH: 2.0}, #theta_list에 적용
     },
-    "기관": {
+    SUBGROUP_INSTITUTION: {
         # 1단계: 재연락이 아예 발생하는지 (θ와 독립적인 별도 파라미터)
         "발생확률": {LOW: 0.05, MID: 0.15, HIGH: 0.30},
         # 2단계: 발생확률을 통과했을 때만 사용하는 혼합분포
@@ -359,17 +366,21 @@ NORMAL_REPEAT_GAP = {
 }
 
 PHISHING_REPEAT_GAP = {
-    "PHISHING_재연락_대출사기형": {
+    LOAN: {
         "theta_list": [623, 2077, 4155], 
         "p_list": [0.156, 0.469, 0.375],
     },
-    "PHISHING_재연락_기관사칭형": {
+    INSTITUTION: {
         "theta_list": [532, 2077, 5194], 
         "p_list": [0.158, 0.421, 0.421],
     },
-    "PHISHING_재연락_지인기타" : {
-    "theta_list": [623, 2077, 4155], 
-    "p_list": [0.173, 0.442, 0.385],
+    ACQUAINTANCE: {
+        "theta_list": [623, 2077, 4155], 
+        "p_list": [0.173, 0.442, 0.385],
+    },
+    ETC: {
+        "theta_list": [623, 2077, 4155], 
+        "p_list": [0.173, 0.442, 0.385],
     },
 }
 
@@ -378,8 +389,8 @@ PHISHING_REPEAT_GAP = {
 # 발신대상_규모
 # ============================================================
 NORMAL_UNIQUE_CALLEES = {
-    "개인": 1,  # 고정
-    "기업": {LOW: 10, MID: 30, HIGH: 100},
+    SUBGROUP_PERSONAL: 1,  # 고정
+    SUBGROUP_CORPORATE: {LOW: 10, MID: 30, HIGH: 100},
 }
 
 PHISHING_UNIQUE_CALLEES = {LOW: 55, MID: 175, HIGH: 400}
@@ -388,14 +399,14 @@ PHISHING_UNIQUE_CALLEES = {LOW: 55, MID: 175, HIGH: 400}
 # ============================================================
 # 연락처_저장여부
 # ============================================================
-NORMAL_IN_CONTACTS = {"지인" : 0.95, "기관" : 0.02} # 5%는 신규지인 예외, 기관은 거의 항상 미저장
+NORMAL_IN_CONTACTS = {SUBGROUP_ACQUAINTANCE: 0.95, SUBGROUP_INSTITUTION: 0.02} # 5%는 신규지인 예외, 기관은 거의 항상 미저장
 PHISHING_IN_CONTACTS = 0.02 # 거의 항상 미저장(예외적 경우를 고려하여 0.02로 설정)
 
 
 # ============================================================
 # 과거통화이력
 # ============================================================
-NORMAL_HAS_PRIOR_HISTORY = {"지인" : 0.95, "기관": 0.02}
+NORMAL_HAS_PRIOR_HISTORY = {SUBGROUP_ACQUAINTANCE: 0.95, SUBGROUP_INSTITUTION: 0.02}
 PHISHING_HAS_PRIOR_HISTORY = 0.02 # 거의 항상 이력 없음(예외적 경우를 고려하여 0.02로 설정)
 
 
@@ -422,8 +433,8 @@ PHISHING_HOUR_BUCKET = {
 #      1에서 빼면 자동 도출됨
 # ============================================================
 NORMAL_FIRST_CONTACT_TYPE_SMS = {
-    "지인": {LOW: 0.35, MID: 0.50, HIGH: 0.65},  # 근거없어 5:5 무정보사전확률
-    "기관": {LOW: 0.40, MID: 0.55, HIGH: 0.70},  # 마스터표 서술("전화개시 드</tool_call>") 근거
+    SUBGROUP_ACQUAINTANCE: {LOW: 0.35, MID: 0.50, HIGH: 0.65},  # 근거없어 5:5 무정보사전확률
+    SUBGROUP_INSTITUTION: {LOW: 0.40, MID: 0.55, HIGH: 0.70},  # 마스터표 서술 근거
 }
 
 PHISHING_FIRST_CONTACT_TYPE_SMS = {
