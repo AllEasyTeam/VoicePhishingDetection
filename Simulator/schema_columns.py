@@ -41,7 +41,7 @@ SCHEMA: list[ColumnSchema] = [
 
     ColumnSchema("sms_to_call", "문자→통화 연계 여부", ValueType.BINARY, Track.DEVICE),
 
-    ColumnSchema("sms_to_call_gap_min", "문자→통화 전환 간격(분 단위)",
+    ColumnSchema("sms_to_call_gap", "문자→통화 전환 간격(분 단위)",
                  ValueType.CONTINUOUS_TIME, Track.DEVICE,
                  nullable=True,
                  depends_on="sms_to_call=0이면 전환 자체가 없음(NaN)"),
