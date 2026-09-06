@@ -10,85 +10,80 @@ _AREA_CODES = [
     "051", "052", "053", "054", "055", "061", "062", "063", "064",
 ]
 
-# config.PHISHING_통화_발신번호_종류_대역 미러 (config 미수정 전제)
-_CALL_BAND = {
-    "010": {"짧게": 0.40, "중간": 0.55, "길게": 0.70},
-    "특번(1566등)": {"짧게": 0.15, "중간": 0.25, "길게": 0.35},
-    "070/기타": {"짧게": 0.05, "중간": 0.20, "길게": 0.35},
+_SOPH_ALIAS = {
+    "짧게": "low", "중간": "mid", "길게": "high",
+    "low": "low", "mid": "mid", "high": "high",
 }
-
-# config.PHISHING_문자_발신번호_종류_대역 미러
-# 지인사칭형만 고유 비중, 나머지는 통화 대역 차용
-_SMS_BAND_지인사칭 = {"010": 0.99, "기타": 0.01}
 
 
 def _get_soph(soph: Union[str, Dict[str, str]], key: str) -> str:
-    return soph.get(key, "중간") if isinstance(soph, dict) else soph
+    raw = soph.get(key, "mid") if isinstance(soph, dict) else soph
+    return _SOPH_ALIAS.get(raw, "mid")
 
 
 def _digits(n: int) -> str:
     return "".join(str(random.randint(0, 9)) for _ in range(n))
 
 
-def _generate_other_phone() -> str:
-    """070/기타·기타 대역: 유선/특번/070/0N0/국제 (이미지 허용 형식)"""
-    kind = random.choice(["특번", "02", "지역", "070", "0N0", "국제"])
-    if kind == "특번":
-        return random.choice(["15", "16", "18"]) + _digits(6)
-    if kind == "02":
-        return "02" + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
-    if kind == "지역":
-        return random.choice(_AREA_CODES) + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
-    if kind == "070":
-        return "070" + _digits(random.randint(5, 8))
-    if kind == "0N0":
-        prefix = random.choice(["060", "080", "030", "050"])
-        max_total = 12 if prefix in ("030", "050") else 11
-        return prefix + _digits(random.randint(5, max_total - 3))
-    return "00" + _digits(random.randint(8, 12))
-
-
-def _phone_from_kind(kind: str) -> str:
-    if kind == "010":
+def _phone_from_category(category: str) -> str:
+    """classify_number_type 카테고리 + 이미지 허용 형식."""
+    if category == "010":
         return "010" + _digits(8)
-    if kind.startswith("특번"):
+    if category == "특번":
         return random.choice(["15", "16", "18"]) + _digits(6)
-    return _generate_other_phone()  # 070/기타, 기타
+    if category == "02(유선)":
+        return "02" + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
+    if category == "070(인터넷전화)":
+        return "070" + _digits(random.randint(5, 8))
+    if category == "00X(국제)":
+        return "00" + _digits(random.randint(8, 12))
+    # 기타
+    if random.random() < 0.5:
+        return random.choice(_AREA_CODES) + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
+    prefix = random.choice(["060", "080", "030", "050"])
+    max_total = 12 if prefix in ("030", "050") else 11
+    return prefix + _digits(random.randint(5, max_total - 3))
 
 
-def _pick_call_kind(soph: str) -> str:
-    cats = list(_CALL_BAND.keys())
-    return random.choices(cats, weights=[_CALL_BAND[c][soph] for c in cats])[0]
+def _pick_from_call_band(config, soph: str) -> str:
+    band = config.PHISHING_CALL_NUMBER_TYPE
+    cats = list(band.keys())
+    return random.choices(cats, weights=[band[c][soph] for c in cats])[0]
 
 
 def _generate_phishing_phone(
     p_type: str,
     first_contact_type: str,
     sophistication: Union[str, Dict[str, str]],
+    config,
 ) -> str:
-    """문자/통화 대역에 따라 피싱 발신번호 생성."""
+    """PHISHING_SMS_NUMBER_TYPE / PHISHING_CALL_NUMBER_TYPE 비중으로 발신번호 생성."""
     soph = _get_soph(sophistication, "발신번호_종류_대역")
-    if soph not in ("짧게", "중간", "길게"):
-        soph = "중간"
+    sms_band = config.PHISHING_SMS_NUMBER_TYPE.get(p_type)
 
-    if first_contact_type == "sms" and p_type == "지인사칭형":
-        kind = random.choices(
-            list(_SMS_BAND_지인사칭.keys()),
-            weights=list(_SMS_BAND_지인사칭.values()),
-        )[0]
+    if first_contact_type == "sms" and isinstance(sms_band, dict):
+        # acquaintance: {"010": 0.99, "기타": 0.01} 처럼 flat
+        # 그 외: PHISHING_CALL_NUMBER_TYPE 차용 (카테고리 → {low/mid/high})
+        sample = next(iter(sms_band.values()), None)
+        if isinstance(sample, (int, float)):
+            kind = random.choices(list(sms_band.keys()), weights=list(sms_band.values()))[0]
+        else:
+            kind = _pick_from_call_band(config, soph)
     else:
-        # 통화 대역, 또는 문자인데 통화 대역 차용(기관/대출/기타)
-        kind = _pick_call_kind(soph)
-    return _phone_from_kind(kind)
+        kind = _pick_from_call_band(config, soph)
+    return _phone_from_category(kind)
 
 
 def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, str]], config) -> dict:
     """
-    피싱 유형(대출/기관/지인사칭/기타)에 따른 차등 θ값을 적용하여 이벤트 1건 생성
+    피싱 유형(loan/institution/acquaintance/etc)에 따른 이벤트 1건 생성.
     """
-    # 1. 개시 채널 → 발신번호 (문자/통화 대역이 채널에 의존)
-    first_contact_type = "sms" if p_type in ["대출사기형", "지인사칭형"] else random.choice(["call", "sms"])
-    phone_number = _generate_phishing_phone(p_type, first_contact_type, sophistication)
+    # 1. 개시 채널 → 발신번호
+    contact_soph = _get_soph(sophistication, "문자선행개시")
+    sms_prob = config.PHISHING_FIRST_CONTACT_TYPE_SMS[p_type][contact_soph]
+    first_contact_type = "sms" if random.random() < sms_prob else "call"
+
+    phone_number = _generate_phishing_phone(p_type, first_contact_type, sophistication, config)
     number_type = config.classify_number_type(phone_number)
     is_global = 1 if number_type == "00X(국제)" else 0
 
@@ -99,50 +94,52 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     call_type = 1  # 수신 (피해자 단말 관점)
 
     # 3. 저장 및 과거 이력
-    in_contacts = 0
-    has_prior_history = 0
-    repeat_gap = np.nan  # 규칙 1: 과거 이력 없으므로 NaN
+    in_contacts = 1 if random.random() < config.PHISHING_IN_CONTACTS else 0
+    has_prior_history = 1 if random.random() < config.PHISHING_HAS_PRIOR_HISTORY else 0
+    if has_prior_history == 1:
+        gap_cfg = config.PHISHING_REPEAT_GAP[p_type]
+        theta = random.choices(gap_cfg["theta_list"], weights=gap_cfg["p_list"])[0]
+        repeat_gap = round(np.random.exponential(scale=theta), 2)
+    else:
+        repeat_gap = np.nan  # 규칙 1
 
     # 4. 문자 내 번호 및 불일치 (Track C)
-    if first_contact_type == "sms":
-        is_num_in_msg = 1 if random.random() < 0.85 else 0
-    else:
-        is_num_in_msg = 1 if random.random() < 0.20 else 0
+    num_soph = _get_soph(sophistication, "문자내_번호_포함확률")
+    is_num_in_msg = 1 if random.random() < config.PHISHING_IS_NUM_IN_MSG[p_type][num_soph] else 0
 
     if is_num_in_msg == 1:
-        inner_num_differs = 1 if random.random() < 0.85 else 0
+        differ_soph = _get_soph(sophistication, "발신번호_문자내번호_불일치율")
+        inner_num_differs = 1 if random.random() < config.PHISHING_INNER_NUM_DIFFERS[differ_soph] else 0
     else:
         inner_num_differs = np.nan
 
     # 5. 문자 -> 통화 연계 간격 (Track B)
-    sms_to_call = 1 if first_contact_type == "sms" else 0
+    sms_soph = _get_soph(sophistication, "문자_통화_연계")
+    sms_to_call = 1 if (
+        first_contact_type == "sms"
+        and random.random() < config.PHISHING_SMS_TO_CALL[p_type][sms_soph]
+    ) else 0
     if sms_to_call == 1:
-        # 피싱은 압박/유도로 전환 간격(theta)이 매우 짧음 (평균 2~5분)
-        theta_gap = 2.0 if p_type in ["기관사칭형", "협박형"] else 5.0
-        sms_to_call_gap_min = round(np.random.exponential(scale=theta_gap), 2)
+        theta = config.PHISHING_SMS_TO_CALL_GAP[p_type]
+        sms_to_call_gap_min = round(np.random.exponential(scale=theta), 2)
     else:
         sms_to_call_gap_min = np.nan
 
-    # 6. URL 및 앱 설치 유도 (.apk)
-    if first_contact_type == "sms":
-        is_url_in_msg = 1 if random.random() < 0.80 else 0
-    else:
-        is_url_in_msg = 1 if random.random() < 0.15 else 0
+    # 6. URL 및 앱 설치 유도
+    url_rate = config.PHISHING_IS_URL_IN_MSG[p_type]
+    is_url_in_msg = 1 if random.random() < url_rate else 0
 
     if is_url_in_msg == 1:
-        is_reliable_url = 0  # 피싱 도메인
-        # 대출/기관 사칭은 악성 앱 설치 유도 확률이 매우 높음
-        apk_prob = 0.85 if p_type in ["대출사기형", "기관사칭형"] else 0.40
-        has_appinstall_link = 1 if random.random() < apk_prob else 0
+        is_reliable_url = 1 if random.random() < config.PHISHING_IS_RELIABLE_URL else 0
+        app_soph = _get_soph(sophistication, "앱설치_유도")
+        has_appinstall_link = 1 if random.random() < config.PHISHING_HAS_APPINSTALL_LINK[p_type][app_soph] else 0
     else:
         is_reliable_url = np.nan
         has_appinstall_link = np.nan
 
     # 7. 순차복수사칭 (특수 규칙: 확정적 0 또는 1)
-    if p_type == "기관사칭형":
-        is_sequential_callers = 1 if random.random() < 0.45 else 0
-    else:
-        is_sequential_callers = 0
+    seq_soph = _get_soph(sophistication, "순차복수사칭")
+    is_sequential_callers = 1 if random.random() < config.PHISHING_IS_SEQUENTIAL_CALLERS[p_type][seq_soph] else 0
 
     # 8. Track A 전용 feature (규칙 4: 통신사 데이터 부재로 NaN)
     is_carrier_altered = np.nan
