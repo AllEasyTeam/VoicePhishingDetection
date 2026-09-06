@@ -11,7 +11,7 @@ def build_dataset(
     n: int, 
     phishing_rate: float, 
     config, 
-    sophistication: Union[str, Dict[str, str]] = "중간", 
+    sophistication: Union[str, Dict[str, str]] = "mid",
     subgroup_ratio_key: str = "B",
     random_state: Optional[int] = None
 ) -> pd.DataFrame:
@@ -23,7 +23,7 @@ def build_dataset(
     - phishing_rate: 클래스 불균형 비율 (float, 0~1)
     - config: Generation/config.py 설정 모듈
     - sophistication: 값-옵션 선택 ('짧게'/'중간'/'길게' 또는 feature별 dict)
-    - subgroup_ratio_key: 하위집단 지인:기관 비율 키 ('A'~'E')
+    - subgroup_ratio_key: 하위집단 지인:기관 비율 키 ('A'~'E', config.RELATION_TYPE_RATIO)
     - random_state: 재현성을 위한 난수 시드값
     """
     if random_state is not None:
@@ -40,8 +40,9 @@ def build_dataset(
     total_weight = sum(type_weights)
     norm_weights = [w / total_weight for w in type_weights]
 
-    # 하위집단(지인 / 기관_개인 / 기관_기업) 비중 설정 (config.관계유형_비중_후보 기준)
-    subgroup_dict = config.관계유형_비중_후보[subgroup_ratio_key]
+    # 하위집단(subgroup_acquaintance / institution_personal / institution_corporate)
+    # 비중 설정 (config.RELATION_TYPE_RATIO 기준)
+    subgroup_dict = config.RELATION_TYPE_RATIO[subgroup_ratio_key]
     subgroup_names = list(subgroup_dict.keys())
     subgroup_weights = list(subgroup_dict.values())
 
@@ -64,7 +65,7 @@ def build_dataset(
             )
         # 8: 이번 사건이 정상 사건인 경우
         else:
-            # 9: subgroup <- 하위집단 확률적 선택 (지인, 기관_개인, 기관_기업)
+            # 9: subgroup <- 하위집단 확률적 선택
             subgroup = random.choices(subgroup_names, weights=subgroup_weights)[0]
             
             # 10: generate_normal_event(하위집단, config, sophistication) 호출 -> 정상 event 생성
@@ -81,7 +82,7 @@ def build_dataset(
         if is_phishing:
             event["incident_type"] = p_type
         else:
-            event["incident_type"] = "정상"
+            event["incident_type"] = "normal"
 
         # 13: dataset에 event 추가.
         dataset.append(event)
@@ -184,8 +185,6 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
         
     from Simulator.Generation import config
-    from Simulator.schema import Track
-    from Simulator.schema_utils import get_feature_columns, get_non_nullable_columns
 
     # 1. 20건 생성 (검증을 위해 피싱 비율을 임의로 상향 설정)
     sample_size = 20
@@ -193,10 +192,11 @@ if __name__ == "__main__":
         n=sample_size, 
         phishing_rate=0.3, 
         config=config, 
-        sophistication="중간", 
+        sophistication=config.MID,
         subgroup_ratio_key="B",
         random_state=42
     )
 
     # 검증 및 리포팅 실행
-    is_valid = validate_and_report_dataset(df_sample)
+    is_valid = validate_check_dataset(df_sample)
+    print("valid:", is_valid)
