@@ -22,3 +22,17 @@ def split_data(df):
     )   
 
     return train, validation, test
+
+
+def train_model(df):
+    # 학습을 위한 함수. (model : xgboost)
+    import xgboost as xgb
+
+    model = xgb.XGBClassifier(
+        
+    )
+
+
+def evaluate(model, df):
+    # 평가를 위한 함수.
+    from sklearn.metrics import classification_report, confusion_matrix
