@@ -141,9 +141,9 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         gap_soph = _get_soph(sophistication, "문자_통화_간격")
         gap_cfg = config.NORMAL_SMS_TO_CALL_GAP
         theta = random.choices(gap_cfg["theta_list"], weights=gap_cfg["p_list"])[0]
-        sms_to_call_gap_min = round(np.random.exponential(scale=theta * gap_cfg["배율"][gap_soph]), 2)
+        sms_to_call_gap = round(np.random.exponential(scale=theta * gap_cfg["배율"][gap_soph]), 2)
     else:
-        sms_to_call_gap_min = np.nan  # 규칙 1
+        sms_to_call_gap = np.nan  # 규칙 1
 
     # 7. URL 및 앱 설치 유도 (Track C)
     url_soph = _get_soph(sophistication, "URL_존재확률")
@@ -177,7 +177,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         "is_num_in_msg": is_num_in_msg,
         "inner_num_differs": inner_num_differs,
         "sms_to_call": sms_to_call,
-        "sms_to_call_gap_min": sms_to_call_gap_min,
+        "sms_to_call_gap": sms_to_call_gap,
         "is_url_in_msg": is_url_in_msg,
         "is_reliable_url": is_reliable_url,
         "has_appinstall_link": has_appinstall_link,

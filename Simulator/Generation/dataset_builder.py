@@ -22,7 +22,7 @@ def build_dataset(
     - n: 생성할 사건 수 (int)
     - phishing_rate: 클래스 불균형 비율 (float, 0~1)
     - config: Generation/config.py 설정 모듈
-    - sophistication: 값-옵션 선택 ('짧게'/'중간'/'길게' 또는 feature별 dict)
+    - sophistication: 값-옵션 선택 (config.LOW/MID/HIGH 또는 feature별 dict)
     - subgroup_ratio_key: 하위집단 지인:기관 비율 키 ('A'~'E', config.RELATION_TYPE_RATIO)
     - random_state: 재현성을 위한 난수 시드값
     """
@@ -32,7 +32,7 @@ def build_dataset(
     # 1: dataset <- 빈 리스트
     dataset = []
 
-    # 보이스피싱 유형(대출사기형, 기관사칭형, 지인사칭형, 기타) 비율 정규화 (config.TYPE_RATIO 기준)
+    # 보이스피싱 유형(loan/institution/acquaintance/etc) 비율 정규화 (config.TYPE_RATIO 기준)
     # total_weight이 1이 아닐 때, norm_weights 계산하여 비율 유지하면서 정규화하기 위한 과정.
     valid_types = {k: v for k, v in config.TYPE_RATIO.items() if v is not None}
     type_names = list(valid_types.keys())
@@ -118,8 +118,8 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
     # debug용으로 일부 column만 미리보기. schema 규칙과 무관함.
     preview_cols = [
         "phone_number", "number_type", "has_prior_history", "repeat_gap", 
-        "sms_to_call", "sms_to_call_gap_min", "is_url_in_msg", "has_appinstall_link", 
-        "is_sequential_callers", "is_phishing", "incident_type"
+        "sms_to_call", "sms_to_call_gap", "is_url_in_msg", "has_appinstall_link",
+        "is_sequential_callers", "is_phishing", "incident_type",
     ]
     pd.set_option("display.max_columns", None)
     pd.set_option("display.width", 1000)
@@ -135,7 +135,7 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
     #       generator 코드에서 실제로 지켜지는지 확인. depends_on은 사람이 읽는 텍스트 설명일 뿐 실행 가능한
     #       조건이 아니라서 schema_utils로 자동화할 수 없고, 여기서 조건을 직접 재현해서 검사
     rule1_prior = (df[df["has_prior_history"] == 0]["repeat_gap"].isna()).all()
-    rule1_sms = (df[df["sms_to_call"] == 0]["sms_to_call_gap_min"].isna()).all()
+    rule1_sms = (df[df["sms_to_call"] == 0]["sms_to_call_gap"].isna()).all()
     rule1_num = (df[df["is_num_in_msg"] == 0]["inner_num_differs"].isna()).all()
     rule1_url = (df[df["is_url_in_msg"] == 0][["is_reliable_url", "has_appinstall_link"]].isna()).all().all()
 
@@ -160,7 +160,7 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
 
     print(f"1. [규칙 1] 선행 조건 미충족 시 NaN 처리:")
     print(f"   - 과거이력 0건 -> repeat_gap NaN: {'✅ 통과' if rule1_prior else '❌ 실패'}")
-    print(f"   - 연계 0 -> sms_to_call_gap_min NaN: {'✅ 통과' if rule1_sms else '❌ 실패'}")
+    print(f"   - 연계 0 -> sms_to_call_gap NaN: {'✅ 통과' if rule1_sms else '❌ 실패'}")
     print(f"   - 문자 내 번호 0 -> inner_num_differs NaN: {'✅ 통과' if rule1_num else '❌ 실패'}")
     print(f"   - URL 0 -> 도메인/앱설치 링크 NaN: {'✅ 통과' if rule1_url else '❌ 실패'}")
     
