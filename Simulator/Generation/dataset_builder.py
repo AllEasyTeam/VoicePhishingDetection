@@ -1,4 +1,12 @@
 # 완성된 dataset 만드는 파일.
+import sys
+from pathlib import Path
+
+# 파일 직접 실행 시에도 프로젝트 루트에서 Simulator 패키지를 찾도록 보정
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import random
 import numpy as np
 import pandas as pd
@@ -107,12 +115,12 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
     
     # 1. 기본 생성 현황 확인
     print("=" * 80)
-    print(f"📊 [합성 데이터 {len(df)}건 생성 결과] (총 {len(df)}건)")
+    print(f"[합성 데이터 {len(df)}건 생성 결과] (총 {len(df)}건)")
     print("=" * 80)
     print(f"- 피싱 라벨 분포:\n{df['is_phishing'].value_counts().to_dict()}")
     print(f"- 사건 유형 분포:\n{df['incident_type'].value_counts().to_dict()}")
     print("\n" + "-" * 80)
-    print("📋 [주요 Feature 샘플 미리보기 (상위 {}건)]".format(preview_sample_size))
+    print("[주요 Feature 샘플 미리보기 (상위 {}건)]".format(preview_sample_size))
     print("-" * 80)
 
     # debug용으로 일부 column만 미리보기. schema 규칙과 무관함.
@@ -127,7 +135,7 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
 
     # 2. 스키마 결측치 및 비즈니스 규칙 정합성 검증
     print("\n" + "=" * 80)
-    print("🔍 [스키마 결측 규칙 무결성 검증]")
+    print("[스키마 결측 규칙 무결성 검증]")
     print("=" * 80)
 
     # 규칙 1: 구조적 선행 게이트 검증
@@ -158,15 +166,16 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
     #       (ColumnSchema에 허용값 목록 개념이 없음) schema_utils로 대체 불가능. 그래서 값 범위까지 직접 검사.
     special_rule_check = (df["is_sequential_callers"].isna().sum() == 0) and (df["is_sequential_callers"].isin([0, 1]).all())
 
-    print(f"1. [규칙 1] 선행 조건 미충족 시 NaN 처리:")
-    print(f"   - 과거이력 0건 -> repeat_gap NaN: {'✅ 통과' if rule1_prior else '❌ 실패'}")
-    print(f"   - 연계 0 -> sms_to_call_gap NaN: {'✅ 통과' if rule1_sms else '❌ 실패'}")
-    print(f"   - 문자 내 번호 0 -> inner_num_differs NaN: {'✅ 통과' if rule1_num else '❌ 실패'}")
-    print(f"   - URL 0 -> 도메인/앱설치 링크 NaN: {'✅ 통과' if rule1_url else '❌ 실패'}")
+    ok, fail = "PASS", "FAIL"
+    print("1. [규칙 1] 선행 조건 미충족 시 NaN 처리:")
+    print(f"   - 과거이력 0건 -> repeat_gap NaN: {ok if rule1_prior else fail}")
+    print(f"   - 연계 0 -> sms_to_call_gap NaN: {ok if rule1_sms else fail}")
+    print(f"   - 문자 내 번호 0 -> inner_num_differs NaN: {ok if rule1_num else fail}")
+    print(f"   - URL 0 -> 도메인/앱설치 링크 NaN: {ok if rule1_url else fail}")
     
-    print(f"2. [규칙 3] 항상 관측 컬럼 결측치 0건 유지: {'✅ 통과' if rule3_check else '❌ 실패'}")
-    print(f"3. [규칙 4] Track A 데이터 접근 불가(전부 NaN): {'✅ 통과' if rule4_check else '❌ 실패'}")
-    print(f"4. [특수규칙] 순차복수사칭 확정적 0/1 채움 (NaN 없음): {'✅ 통과' if special_rule_check else '❌ 실패'}")
+    print(f"2. [규칙 3] 항상 관측 컬럼 결측치 0건 유지: {ok if rule3_check else fail}")
+    print(f"3. [규칙 4] Track A 데이터 접근 불가(전부 NaN): {ok if rule4_check else fail}")
+    print(f"4. [특수규칙] 순차복수사칭 확정적 0/1 채움 (NaN 없음): {ok if special_rule_check else fail}")
     print("=" * 80)
     
     # 모든 검증 결과 반환
