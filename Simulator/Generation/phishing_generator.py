@@ -121,9 +121,9 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     ) else 0
     if sms_to_call == 1:
         theta = config.PHISHING_SMS_TO_CALL_GAP[p_type]
-        sms_to_call_gap_min = round(np.random.exponential(scale=theta), 2)
+        sms_to_call_gap = round(np.random.exponential(scale=theta), 2)
     else:
-        sms_to_call_gap_min = np.nan
+        sms_to_call_gap = np.nan
 
     # 6. URL 및 앱 설치 유도
     url_rate = config.PHISHING_IS_URL_IN_MSG[p_type]
@@ -159,7 +159,7 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
         "is_num_in_msg": is_num_in_msg,
         "inner_num_differs": inner_num_differs,
         "sms_to_call": sms_to_call,
-        "sms_to_call_gap_min": sms_to_call_gap_min,
+        "sms_to_call_gap": sms_to_call_gap,
         "is_url_in_msg": is_url_in_msg,
         "is_reliable_url": is_reliable_url,
         "has_appinstall_link": has_appinstall_link,
