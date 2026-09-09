@@ -112,7 +112,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
 
     contact_soph = _get_soph(sophistication, config.SOPH_FIRST_CONTACT)
     sms_prob = config.NORMAL_FIRST_CONTACT_TYPE_SMS[group_key][contact_soph]
-    first_contact_type = "sms" if random.random() < sms_prob else "call"
+    first_contact_type = 0 if random.random() < sms_prob else 1  # 0: 문자(sms), 1: 통화(call)
 
     # 3. 연락처 저장 및 과거 통화 이력
     in_contacts = 1 if random.random() < config.NORMAL_IN_CONTACTS[group_key] else 0
@@ -140,7 +140,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         msg_number_official_match = np.nan  # 규칙 1
 
     # 6. 문자 -> 통화 연계 및 간격 (Track B)
-    sms_to_call = 1 if (first_contact_type == "sms" and random.random() < config.NORMAL_SMS_TO_CALL) else 0
+    sms_to_call = 1 if (first_contact_type == 0 and random.random() < config.NORMAL_SMS_TO_CALL) else 0  # first_contact_type == 0: 문자(sms)로 시작한 경우
     if sms_to_call == 1:
         gap_soph = _get_soph(sophistication, config.SOPH_SMS_TO_CALL_GAP)
         gap_cfg = config.NORMAL_SMS_TO_CALL_GAP

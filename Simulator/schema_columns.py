@@ -22,7 +22,7 @@ SCHEMA: list[ColumnSchema] = [
     ColumnSchema("hour_bucket", "활동 시간대", ValueType.CATEGORICAL, Track.DEVICE, nullable=True,
                  depends_on="피싱 기타(ETC) 유형은 표본 부족(n=2)으로 NaN"),
 
-    ColumnSchema("first_contact_type", "개시 채널(문자/통화)", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("first_contact_type", "개시 채널(0:문자/1:통화)", ValueType.BINARY, Track.DEVICE),
 
     ColumnSchema("has_prior_history", "과거 통화 이력", ValueType.BINARY, Track.DEVICE),
 

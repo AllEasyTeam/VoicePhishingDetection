@@ -62,13 +62,13 @@ def _pick_from_call_band(config, soph: str) -> str:
 
 def _generate_phishing_phone(
     p_type: str,
-    first_contact_type: str,
+    first_contact_type: int,  # 0: 문자(sms), 1: 통화(call)
     sophistication: Union[str, Dict[str, str]],
     config,
 ) -> str:
     """PHISHING_SMS_NUMBER_TYPE(발신번호_종류_대역 - 문자) / PHISHING_CALL_NUMBER_TYPE(발신번호_종류_대역 - 통화) 비중으로 발신번호 생성."""
     # p_type: 피싱 유형(loan/institution/acquaintance/etc)
-    # first_contact_type: 개시 채널(문자/sms or 통화/call)
+    # first_contact_type: 개시 채널(0: 문자/sms, 1: 통화/call)
 
     soph = _get_soph(sophistication, config.SOPH_NUMBER_TYPE_BAND)
 
@@ -79,7 +79,7 @@ def _generate_phishing_phone(
 
     # 개시 채널이 문자이고, sms_band가 dict이면(= 해당 피싱 유형이 문자 발신번호 확률분포를 갖는 경우) sms_band에서 확률분포에 따라 발신번호 카테고리 뽑기.
     # 그 외에는, PHISHING_CALL_NUMBER_TYPE에서 확률분포에 따라 발신번호 카테고리 뽑기.
-    if first_contact_type == "sms" and isinstance(sms_band, dict):
+    if first_contact_type == 0 and isinstance(sms_band, dict):  # 0: 문자(sms)
         sample = next(iter(sms_band.values()), None)
         if isinstance(sample, (int, float)):
             # acquaintance 같이 flat(민감도 분석 X)인 경우, 바로 확률로 뽑기.
@@ -101,7 +101,7 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     # column 중 "first_contact_type", "phone_number", "number_type", "is_global" 값 확정.
     contact_soph = _get_soph(sophistication, config.SOPH_FIRST_CONTACT)
     sms_prob = config.PHISHING_FIRST_CONTACT_TYPE_SMS[p_type][contact_soph]
-    first_contact_type = "sms" if random.random() < sms_prob else "call"
+    first_contact_type = 0 if random.random() < sms_prob else 1  # 0: 문자(sms), 1: 통화(call)
 
     phone_number = _generate_phishing_phone(p_type, first_contact_type, sophistication, config)
     number_type = config.classify_number_type(phone_number)
@@ -166,8 +166,8 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     # column 중 "sms_to_call", "sms_to_call_gap" 값 확정
     sms_soph = _get_soph(sophistication, config.SOPH_SMS_TO_CALL)
     sms_to_call = 1 if (
-        # 문자 -> 통화 연계 여부는 "문자"로 시작해야 하므로 first_contact_type도 확인해야 함.
-        first_contact_type == "sms"
+        # 문자 -> 통화 연계 여부는 문자(0)로 시작해야 하므로 first_contact_type도 확인해야 함.
+        first_contact_type == 0
         and random.random() < config.PHISHING_SMS_TO_CALL[p_type][sms_soph]
     ) else 0
     if sms_to_call == 1:
