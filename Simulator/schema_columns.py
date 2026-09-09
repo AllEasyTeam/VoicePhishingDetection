@@ -37,7 +37,7 @@ SCHEMA: list[ColumnSchema] = [
     ColumnSchema("repeat_gap", "재연락 간격(통화 간의 간격, 분 단위)",
                  ValueType.CONTINUOUS_TIME, Track.DEVICE,
                  nullable=True,
-                 depends_on="has_repeat_contact = 0이면 간격 성립 안 함(NaN)"),  # 이 사건 안 연락 간격 (같은 번호 한정 X)
+                 depends_on="has_repeat_contact = 0이면 간격 성립 안 함(NaN)"),  # 이 사건 안 연락 간격 (같은 번호 한정 X). 사건 내 반복이 여러 번이어도 평균이 아니라 첫 번째 반복까지의 간격
 
     ColumnSchema("in_contacts", "번호 저장 여부", ValueType.BINARY, Track.DEVICE),  # 대표번호 기준
 
@@ -58,7 +58,7 @@ SCHEMA: list[ColumnSchema] = [
     ColumnSchema("sms_to_call_gap", "문자→통화 전환 간격(분 단위)",
                  ValueType.CONTINUOUS_TIME, Track.DEVICE,
                  nullable=True,
-                 depends_on="sms_to_call=0이면 전환 자체가 없음(NaN)"),
+                 depends_on="sms_to_call=0이면 전환 자체가 없음(NaN)"),  # 사건 첫 이벤트(문자) -> 그 다음 통화 1건까지의 간격. 평균 아님
 
     ColumnSchema("is_url_in_msg", "(문자) URL 포함 여부", ValueType.BINARY, Track.DEVICE_STRUCTURAL),  # 사건 내 그런 문자가 있었는지(존재 여부)
 
