@@ -126,7 +126,8 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     )
     call_time = base_time.strftime("%Y-%m-%d %H:%M:%S")  # call_time은 항상 실제 시각을 가짐
     hour_bucket = np.nan if skew_prob is None else hour   # ETC 유형만 hour_bucket 자체를 NaN 처리
-    call_type = 1  # 수신 (피해자 단말 관점)
+    # call_type=1(수신) 고정 가정이 실측 근거 없이 판별력만 갖는 것으로 판단되어 보류.
+    # call_type = 1  # 수신 (피해자 단말 관점)
 
 
     # 3. 저장 및 과거 이력
@@ -215,7 +216,7 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
         "phone_number": phone_number,
         "number_type": number_type,
         "call_time": call_time,
-        "call_type": call_type,
+        # "call_type": call_type,
         "hour_bucket": hour_bucket,
         "first_contact_type": first_contact_type,
         "has_prior_history": has_prior_history,

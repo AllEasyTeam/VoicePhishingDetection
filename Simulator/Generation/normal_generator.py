@@ -108,7 +108,8 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
     base_time = datetime(2026, 1, 1) + timedelta(minutes=random.randint(0, 525600))
     call_time = base_time.strftime("%Y-%m-%d %H:%M:%S")
     hour_bucket = base_time.hour
-    call_type = random.choice([0, 1])  # 0: 발신, 1: 수신
+    # call_type=1(수신) 고정 가정이 실측 근거 없이 판별력만 갖는 것으로 판단되어 보류.
+    # call_type = random.choice([0, 1])  # 0: 발신, 1: 수신
 
     contact_soph = _get_soph(sophistication, config.SOPH_FIRST_CONTACT)
     sms_prob = config.NORMAL_FIRST_CONTACT_TYPE_SMS[group_key][contact_soph]
@@ -174,7 +175,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         "phone_number": phone_number,
         "number_type": number_type,
         "call_time": call_time,
-        "call_type": call_type,
+        # "call_type": call_type,
         "hour_bucket": hour_bucket,
         "first_contact_type": first_contact_type,
         "has_prior_history": has_prior_history,

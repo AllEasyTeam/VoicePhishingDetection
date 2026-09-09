@@ -14,34 +14,27 @@ def prepare_categorical(df):
 
 
 def split_data(df):
-    # dataframe을 train, validation, test set으로 분할하는 함수.
-    # train: 60%, validation: 20%, test: 20% 으로 분할.
+    # dataframe을 train, test set으로 분할하는 함수.
+    # train: 70%  test: 30% 으로 분할.
     # dataset 자체를 분할하기 때문에, get_feature_columns() 등의 schema_utils 함수는 호출하지 않음.
     from sklearn.model_selection import train_test_split
 
-    # train_val(train + validation)과 test set으로 분할.
-    train_val, test = train_test_split(
+    # train과 test set으로 분할.
+    train, test = train_test_split(
         df,
-        test_size = 0.2, # 20%를 test set으로 분할.
+        test_size = 0.3, # 30%를 test set으로 분할.
         random_state = 42, # 재현성 확보를 위해 random_state 고정.(값이 중요한 게 아님. 동일 값을 사용하는 게 중요.)
         stratify = df["is_phishing"]
     )
 
-    # train_val(train + validation)을 train과 validation set으로 분할.
-    train, validation = train_test_split(
-        train_val,
-        test_size = 0.25, # 25%를 validation set으로 분할 
-        random_state = 42,
-        stratify = train_val["is_phishing"]
-    )   
-
-    return train, validation, test
+    return train, test
 
 
 def train_model(df, val=None, feature_cols=None):
     # 학습을 위한 함수. (model : xgboost)
-    # val: 선택적 검증셋. 최종 모드(main.py)는 넘겨서 조기종료/모니터링에 사용,
-    # K-Fold(sensitivity_analysis.py)는 안 넘김(표준 K-Fold 방식).
+    # val: 선택적 검증셋(조기종료용). 현재는 main.py/sensitivity_analysis.py 둘 다
+    # val 없이 호출함(최종 모드도 train/test 2분할만 씀) -> 아래 val 분기는 지금 호출
+    # 경로에서는 안 타지만, 나중에 조기종료가 다시 필요해지면 val을 넘기기만 하면 되도록 남겨둠.
     # feature_cols: 학습에 사용할 feature 컬럼 목록. Track 시나리오별로 다르게 넘어옴. 민감도 분석에서는 전체 feature 사용.
     import xgboost as xgb
     from Simulator.schema_utils import get_feature_columns
@@ -82,8 +75,9 @@ def train_model(df, val=None, feature_cols=None):
     )
 
     if val is not None:
-        # 최종 모드: 검증셋으로 조기종료(val 존재함) -> n_estimators=300까지 다 안 돌고 검증 성능이
-        # 20라운드 연속 개선 안 되면 멈춤(과적합 방지, 학습 시간 단축).
+        # val이 넘어온 경우(현재 호출 경로에서는 안 씀): 검증셋으로 조기종료 ->
+        # n_estimators=300까지 다 안 돌고 검증 성능이 20라운드 연속 개선 안 되면 멈춤
+        # (과적합 방지, 학습 시간 단축).
         X_val = val[feature_cols].copy()
         X_val[categorical_cols] = X_val[categorical_cols].astype("category")
         y_val = val["is_phishing"]
@@ -91,7 +85,9 @@ def train_model(df, val=None, feature_cols=None):
         model.set_params(early_stopping_rounds=20)
         model.fit(X, y, eval_set=[(X_val, y_val)], verbose=False)
     else:
-        # K-Fold 모드(민감도 분석): val 없이 표준 방식대로 n_estimators 고정 학습.
+        # 현재 기본 경로(최종 모드/K-Fold 모두): val 없이 n_estimators 고정 학습.
+        # max_depth=4/learning_rate=0.05처럼 이미 보수적인 하이퍼파라미터로
+        # 과적합을 억제하고 있어서, 조기종료 없이도 감당 가능하다고 판단.
         model.fit(X, y)
 
     return model

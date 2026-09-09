@@ -42,8 +42,8 @@ SENSITIVITY_PARAMS = [
 
 
 def run_final():
-    """최종 모드: 확정한 config 값으로 데이터셋 1개 생성 -> split_data() 3분할
-    -> Track 시나리오(A/B/C)별로 feature만 다르게 골라 train_model()/evaluate() 반복."""
+    """최종 모드: 확정한 config 값으로 데이터셋 1개 생성 -> split_data() 2분할(train/test)
+    -> Track 시나리오(B/C)별로 feature만 다르게 골라 train_model()/evaluate() 반복."""
     df = build_dataset(
         n=N,
         phishing_rate=config.CLASS_IMBALANCE,
@@ -51,15 +51,15 @@ def run_final():
         random_state=GEN_SEED,
         config=config,
     )
-    df = prepare_categorical(df)  # train/val/test로 나뉘기 전에 category dtype 한 번만 확정
+    df = prepare_categorical(df)  # train/test로 나뉘기 전에 category dtype 한 번만 확정
 
-    train_set, val_set, test_set = split_data(df) # train/validation/test 3분할
+    train_set, test_set = split_data(df) # train/test 2분할
 
-    results = {}  # {시나리오명("A"/"B"/"C"): evaluate() 결과}
+    results = {}  # {시나리오명("B"/"C"): evaluate() 결과}
     for scenario_name, tracks in TRACK_SCENARIOS.items():
-        # 시나리오(A,B,C) 개수만큼 총 3번 반복. (Track별로 다른 모델 생성 및 평가 진행)
+        # TRACK_SCENARIOS 개수만큼 반복. (Track별로 다른 모델 생성 및 평가 진행)
         cols = get_feature_columns(track_filter=tracks)
-        model = train_model(train_set, val_set, feature_cols=cols)
+        model = train_model(train_set, feature_cols=cols)
         results[scenario_name] = evaluate(model, test_set, feature_cols=cols)  # test set으로 최종 평가
     return results
 

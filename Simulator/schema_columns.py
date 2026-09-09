@@ -22,7 +22,8 @@ SCHEMA: list[ColumnSchema] = [
 
     ColumnSchema("call_time", "발신/수신 시간", ValueType.DATETIME, Track.DEVICE, is_feature=False), # is_feature = False -> 학습 시 제외.  # 사건 첫 이벤트 시각
 
-    ColumnSchema("call_type", "발신/수신", ValueType.BINARY, Track.DEVICE),  # 사건 첫 이벤트 기준 (피해자 단말 관점)
+    # call_type=1(수신) 고정 가정이 실측 근거 없이 판별력만 갖는 것으로 판단되어 보류.
+    # ColumnSchema("call_type", "발신/수신", ValueType.BINARY, Track.DEVICE),  # 사건 첫 이벤트 기준 (피해자 단말 관점)
 
     ColumnSchema("hour_bucket", "활동 시간대", ValueType.CATEGORICAL, Track.DEVICE, nullable=True,
                  depends_on="피싱 기타(ETC) 유형은 표본 부족(n=2)으로 NaN"),  # 사건 첫 이벤트 기준
