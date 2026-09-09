@@ -4,6 +4,10 @@ schema_columns.py — 실제 21개 컬럼 데이터.
 역할: schema.py의 ColumnSchema 틀을 이용해, 실제 컬럼 21개를 채워넣은 목록.    
       컬럼 추가/수정 시 이 파일만 건드리면 됨.
 
+Row 단위: 1 row = 1 사건(피해자 경험 전체 요약). 1개 번호가 아님.
+  복수 번호·복수 문자/통화가 있어도 그 전체를 한 row로 요약.
+  단일값이 필요한 컬럼은 "이 사건 첫 이벤트" 기준 (phone_number / first_contact_type 등).
+
 phone_number이 is_feature = False인 이유: 학습 시 전화번호를 통째로 외울 수 있기 때문. 
 call_time이 is_feature = False인 이유: 학습 시 call_time으로 얻은 hour_bucket을 사용하기 때문. (중복 방지)
 """
@@ -11,27 +15,28 @@ call_time이 is_feature = False인 이유: 학습 시 call_time으로 얻은 hou
 from Simulator.schema import ColumnSchema, ValueType, Track
 
 SCHEMA: list[ColumnSchema] = [
-    ColumnSchema("phone_number", "전화번호", ValueType.TEXT, Track.ID, is_feature=False), # is_feature = False -> 학습 시 제외.
+    # 사건 대표번호(=최초 접촉 발신번호). 번호 단위 PK가 아님.
+    ColumnSchema("phone_number", "사건 대표번호(최초 접촉 발신번호)", ValueType.TEXT, Track.ID, is_feature=False), # is_feature = False -> 학습 시 제외.
 
-    ColumnSchema("number_type", "발신번호 종류/대역(010/070 ...)", ValueType.CATEGORICAL, Track.DEVICE),
+    ColumnSchema("number_type", "발신번호 종류/대역(010/070 ...)", ValueType.CATEGORICAL, Track.DEVICE),  # 대표번호 기준
 
-    ColumnSchema("call_time", "발신/수신 시간", ValueType.DATETIME, Track.DEVICE, is_feature=False), # is_feature = False -> 학습 시 제외.
+    ColumnSchema("call_time", "발신/수신 시간", ValueType.DATETIME, Track.DEVICE, is_feature=False), # is_feature = False -> 학습 시 제외.  # 사건 첫 이벤트 시각
 
-    ColumnSchema("call_type", "발신/수신", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("call_type", "발신/수신", ValueType.BINARY, Track.DEVICE),  # 사건 첫 이벤트 기준 (피해자 단말 관점)
 
     ColumnSchema("hour_bucket", "활동 시간대", ValueType.CATEGORICAL, Track.DEVICE, nullable=True,
-                 depends_on="피싱 기타(ETC) 유형은 표본 부족(n=2)으로 NaN"),
+                 depends_on="피싱 기타(ETC) 유형은 표본 부족(n=2)으로 NaN"),  # 사건 첫 이벤트 기준
 
-    ColumnSchema("first_contact_type", "개시 채널(0:문자/1:통화)", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("first_contact_type", "개시 채널(0:문자/1:통화)", ValueType.BINARY, Track.DEVICE),  # 사건 첫 이벤트 기준 (번호별 X)
 
-    ColumnSchema("has_prior_history", "과거 통화 이력", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("has_prior_history", "과거 통화 이력", ValueType.BINARY, Track.DEVICE),  # 이 사건 기준
 
     ColumnSchema("repeat_gap", "재연락 간격(통화 간의 간격, 분 단위)",
                  ValueType.CONTINUOUS_TIME, Track.DEVICE,
                  nullable=True,
-                 depends_on="has_prior_history = 0이면 간격 성립 안 함(NaN)"),
+                 depends_on="has_prior_history = 0이면 간격 성립 안 함(NaN)"),  # 이 사건 안 연락 간격 (같은 번호 한정 X)
 
-    ColumnSchema("in_contacts", "번호 저장 여부", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("in_contacts", "번호 저장 여부", ValueType.BINARY, Track.DEVICE),  # 대표번호 기준
 
     ColumnSchema("is_num_in_msg", "문자 내 번호 포함 여부", ValueType.BINARY, Track.DEVICE_STRUCTURAL),
 
@@ -45,7 +50,7 @@ SCHEMA: list[ColumnSchema] = [
                  nullable=True,
                  depends_on="is_num_in_msg=0이면 비교대상 없음(NaN)"),
 
-    ColumnSchema("sms_to_call", "문자→통화 연계 여부", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("sms_to_call", "문자→통화 연계 여부", ValueType.BINARY, Track.DEVICE),  # 이 사건 전체 요약
 
     ColumnSchema("sms_to_call_gap", "문자→통화 전환 간격(분 단위)",
                  ValueType.CONTINUOUS_TIME, Track.DEVICE,
@@ -80,7 +85,7 @@ SCHEMA: list[ColumnSchema] = [
                  ValueType.CONTINUOUS_COUNT, Track.CARRIER, nullable=True,
                  depends_on="통신사 실측자료 있는 사건만 값 존재, 대부분 NaN"),
 
-    ColumnSchema("is_global", "국제번호 여부", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("is_global", "국제번호 여부", ValueType.BINARY, Track.DEVICE),  # 대표번호 기준
 
-    ColumnSchema("is_sequential_callers", "순차복수사칭 여부", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("is_sequential_callers", "순차복수사칭 여부", ValueType.BINARY, Track.DEVICE),  # 이 사건 안 복수번호 릴레이 여부
 ]
