@@ -232,10 +232,10 @@ PHISHING_NUMBER_CLUSTER = {LOW: 0.20, MID: 0.50, HIGH: 0.75}
 # ============================================================
 NORMAL_IS_SEQUENTIAL_CALLERS = {LOW: 0.01, MID: 0.03, HIGH: 0.05}
 PHISHING_IS_SEQUENTIAL_CALLERS = {
-    INSTITUTION: {LOW: 0.50, MID: 0.68, HIGH: 0.85},
-    LOAN: {LOW: 0.30, MID: 0.55, HIGH: 0.80},
-    ACQUAINTANCE: {LOW: 0.05, MID: 0.12, HIGH: 0.20},
-    ETC:   {LOW: 0.05, MID: 0.12, HIGH: 0.20},
+    INSTITUTION: {LOW: 0.70, MID: 0.83, HIGH: 0.95},   # n=11
+    LOAN:        {LOW: 0.30, MID: 0.55, HIGH: 0.80},   # n=2
+    ACQUAINTANCE:{LOW: 0.05, MID: 0.12, HIGH: 0.20},   # n=0
+    ETC:         {LOW: 0.05, MID: 0.12, HIGH: 0.20},   # n=0
 }
 
 
@@ -244,10 +244,10 @@ PHISHING_IS_SEQUENTIAL_CALLERS = {
 # ============================================================
 NORMAL_HAS_APPINSTALL_LINK = {LOW: 0.01, MID: 0.03, HIGH: 0.05}
 PHISHING_HAS_APPINSTALL_LINK = {    
-    LOAN: {LOW: 0.05, MID: 0.12, HIGH: 0.20},    
-    INSTITUTION: {LOW: 0.50, MID: 0.68, HIGH: 0.85},
-    ACQUAINTANCE: {LOW: 0.30, MID: 0.55, HIGH: 0.80},
-    ETC:   {LOW: 0.05, MID: 0.12, HIGH: 0.20},
+    LOAN: {LOW: 0.05, MID: 0.12, HIGH: 0.20},         # n=0
+    INSTITUTION: {LOW: 0.50, MID: 0.68, HIGH: 0.85},  # n=4
+    ACQUAINTANCE: {LOW: 0.50, MID: 0.68, HIGH: 0.85}, # n=6
+    ETC: {LOW: 0.30, MID: 0.55, HIGH: 0.80},          # n=2
 } 
 
 
@@ -342,10 +342,10 @@ PHISHING_SMS_NUMBER_TYPE = {
 # ============================================================
 NORMAL_SMS_TO_CALL = 0.2
 PHISHING_SMS_TO_CALL = {
-    LOAN: {LOW: 0.30, MID: 0.55, HIGH: 0.80},
-    INSTITUTION: {LOW: 0.50, MID: 0.68, HIGH: 0.85},
-    ACQUAINTANCE: {LOW: 0.05, MID: 0.12, HIGH: 0.20},
-    ETC:   {LOW: 0.05, MID: 0.12, HIGH: 0.20},
+    INSTITUTION: {LOW: 0.70, MID: 0.83, HIGH: 0.95},   # n=12
+    LOAN:        {LOW: 0.30, MID: 0.55, HIGH: 0.80},   # n=2
+    ACQUAINTANCE:{LOW: 0.30, MID: 0.55, HIGH: 0.80},   # n=1
+    ETC:         {LOW: 0.05, MID: 0.12, HIGH: 0.20},   # n=0
 }
 
 
@@ -495,10 +495,10 @@ NORMAL_FIRST_CONTACT_TYPE_SMS = {
 }
 
 PHISHING_FIRST_CONTACT_TYPE_SMS = {
-    LOAN: {LOW: 0.00, MID: 0.03, HIGH: 0.18},
-    INSTITUTION: {LOW: 0.13, MID: 0.28, HIGH: 0.43},
-    ACQUAINTANCE: {LOW: 0.85, MID: 1.00, HIGH: 1.00},
-    ETC:   {LOW: 0.00, MID: 0.00, HIGH: 0.15},
+    INSTITUTION: {LOW: 0.70, MID: 0.83, HIGH: 0.95},   # n=20
+    LOAN:        {LOW: 0.30, MID: 0.55, HIGH: 0.80},   # n=2
+    ACQUAINTANCE:{LOW: 0.70, MID: 0.83, HIGH: 0.95},   # n=13
+    ETC:         {LOW: 0.30, MID: 0.55, HIGH: 0.80},   # n=1
 }
 
 
