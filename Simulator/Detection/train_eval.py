@@ -104,6 +104,7 @@ def evaluate(model, df, feature_cols=None):
         f1_score,
         classification_report,
         confusion_matrix,
+        precision_recall_curve,
     )
     from Simulator.schema_utils import get_feature_columns
 
@@ -121,9 +122,26 @@ def evaluate(model, df, feature_cols=None):
     categorical_cols = X.select_dtypes(include="object").columns
     X[categorical_cols] = X[categorical_cols].astype("category")
 
-    pred = model.predict(X)
+    # 목적: model.predict()의 기본 threshold(0.5)는 극단적 클래스 불균형(피싱 1% vs 정상 99%)
+    # 데이터에서는 최적이 아닐 수 있음(양성 확률이 0.5를 잘 못 넘어서 recall이 과도하게 낮게 나올 수 있음). 
+    # 그래서 확률(proba)만 뽑아서, precision-recall curve 상에서 F1이 최대가 되는 threshold를 직접 탐색해 적용함.
+    # 주의(한계): 지금은 별도의 검증셋이 없어서(run_final()도 train/test 2분할만 씀),
+    # threshold를 "평가 대상 df 자기 자신"에서 찾는다 -> 이 df에 대해서는 다소 낙관적인
+    # (실제보다 좋게 보이는) F1이 나올 수 있음. 진짜 편향 없는 평가를 원하면 threshold
+    # 탐색은 별도 검증셋에서, 최종 성능 측정은 test set에서 하도록 분리해야 함.
+    proba = model.predict_proba(X)[:, 1]  # 피싱(1)일 확률
+
+    precisions, recalls, thresholds = precision_recall_curve(y, proba)
+    # precision_recall_curve는 precision/recall을 thresholds보다 1개 더 많이 반환함
+    # (마지막 지점은 threshold 없이 recall=0 지점) -> 그 마지막 지점은 탐색에서 제외.
+    f1_scores = 2 * (precisions[:-1] * recalls[:-1]) / (precisions[:-1] + recalls[:-1] + 1e-10)  # +1e-10: 0으로 나누기 방지
+    best_idx = f1_scores.argmax()
+    best_threshold = float(thresholds[best_idx])  # F1이 최대가 되는 threshold
+
+    pred = (proba >= best_threshold).astype(int)
 
     return {
+        "threshold": best_threshold,  # 이번 평가에 실제로 적용된 threshold(참고/재현용)
         # --- fold 집계용 스칼라 지표 ---
         "accuracy": accuracy_score(y, pred),
         # zero_division=0: 한 클래스만 예측될 때 경고/에러 대신 0으로 처리
