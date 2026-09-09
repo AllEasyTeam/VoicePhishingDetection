@@ -36,4 +36,31 @@ def train_model(df, val=None):
 
 def evaluate(model, df):
     # 평가를 위한 함수.
-    from sklearn.metrics import classification_report, confusion_matrix
+    # accuracy / precision / recall / F1 / confusion_matrix / feature importance 반환.
+    from sklearn.metrics import (
+        accuracy_score,
+        precision_score,
+        recall_score,
+        f1_score,
+        classification_report,
+        confusion_matrix,
+    )
+    from Simulator.schema_utils import get_feature_columns
+
+    feature_cols = get_feature_columns()
+    X = df[feature_cols]
+    y = df["is_phishing"]
+    pred = model.predict(X)
+
+    return {
+        # --- fold 집계용 스칼라 지표 ---
+        "accuracy": accuracy_score(y, pred),
+        # zero_division=0: 한 클래스만 예측될 때 경고/에러 대신 0으로 처리
+        "precision": precision_score(y, pred, zero_division=0),
+        "recall": recall_score(y, pred, zero_division=0),
+        "f1": f1_score(y, pred, zero_division=0),
+        "confusion_matrix": confusion_matrix(y, pred),
+        "classification_report": classification_report(y, pred, zero_division=0),
+        # feature명 → 중요도. XGBoost 기본(gain 기반) importance
+        "feature_importance": dict(zip(feature_cols, model.feature_importances_)),
+    }
