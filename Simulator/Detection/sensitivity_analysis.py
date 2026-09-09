@@ -7,7 +7,7 @@ from sklearn.model_selection import StratifiedKFold
 
 
 def run_sensitivity(
-    param_name: str,                    # 스윕 대상인 feature 이름(config.py 섹션명)  ex) "NORMAL_INNER_NUM_DIFFERS"
+    param_name: str,                    # 스윕 대상인 feature 이름. config.py 변수명이 아니라 generator의 _get_soph() 조회 key(한글)  ex) "URL_존재확률"
     candidate_values: List[str],        # param_name에 하나씩 대입해볼 sophistication 값 목록.  ex) [LOW, MID, HIGH]
     fixed_config,                       # config.py 모듈. param_name 외 나머지 값은 전부 여기서 그대로(고정) 가져다 씀. Detection/ 안에서 config.py import 하지 않기 위한 parameter.
     base_sophistication: Optional[str] = None,  # param_name을 제외한 다른 feature들에 공통 적용할 sophistication. 스윕 대상인 feature 외의 다른 feature들이 LOW/MID/HIGH 중 어떤 값을 쓸지 결정. (보통, MID)
