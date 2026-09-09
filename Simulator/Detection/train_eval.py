@@ -24,19 +24,66 @@ def split_data(df):
     return train, validation, test
 
 
-def train_model(df, val=None):
+def train_model(df, val=None, feature_cols=None):
     # 학습을 위한 함수. (model : xgboost)
     # val: 선택적 검증셋. 최종 모드(main.py)는 넘겨서 조기종료/모니터링에 사용,
     # K-Fold(sensitivity_analysis.py)는 안 넘김(표준 K-Fold 방식).
+    # feature_cols: 학습에 사용할 feature 컬럼 목록. Track 시나리오별로 다르게 넘어옴. 민감도 분석에서는 전체 feature 사용.
     import xgboost as xgb
+    from Simulator.schema_utils import get_feature_columns
+
+    # feature_cols 존재하는 경우: Track 시나리오가 넘어온 경우(Track A,B,C) -> 해당 feature만 사용
+    # feature_cols 존재하지 않는 경우: 민감도 분석 진행 -> 전체 feature 모두 사용
+    feature_cols = feature_cols or get_feature_columns()
+    # 방어적 필터: feature_cols에 is_feature=False인 컬럼(phone_number, call_time 등)이
+    # 실수로 섞여 들어와도 여기서 한 번 더 걸러냄.
+    valid_cols = set(get_feature_columns())
+    feature_cols = [c for c in feature_cols if c in valid_cols]
+    X = df[feature_cols].copy()
+    y = df["is_phishing"]
+
+    # number_type/first_contact_type처럼 문자열(범주형) 컬럼은 XGBoost 네이티브 카테고리 처리를
+    # 쓰기 위해 dtype만 "category"로 바꿔줌 (원-핫 인코딩 대신, enable_categorical=True와 짝).
+    categorical_cols = X.select_dtypes(include="object").columns
+    X[categorical_cols] = X[categorical_cols].astype("category")
+
+    # 클래스 불균형(피싱 1% vs 정상 99%) 보정.
+    # scale_pos_weight = 음성 개수 / 양성 개수 -> 양성(피싱) 오분류에 더 큰 패널티를 줌.
+    # config.CLASS_IMBALANCE(고정값)가 아니라 실제 df에서 계산 -> Track/fold마다 표본이 달라져도 항상 정확한 비율 반영.
+    neg, pos = int((y == 0).sum()), int((y == 1).sum())
+    scale_pos_weight = neg / pos if pos > 0 else 1
 
     model = xgb.XGBClassifier(
+        n_estimators=300,       # 트리 개수. 아래 학습률을 낮춘 만큼 넉넉하게 잡고 조기종료/고정 반복으로 제어.
+        max_depth=4,            # 얕은 트리. 양성 표본이 적어(전체 1%) 트리가 깊으면 소수 양성 사례에 과적합하기 쉬움.
+        learning_rate=0.05,     # 낮은 학습률 -> 한 트리가 과도하게 영향력을 갖지 않도록 완만하게 학습.
+        scale_pos_weight=scale_pos_weight,  # 클래스 불균형 보정(위에서 계산).
+        eval_metric="aucpr",    # PR-AUC. 극단적 불균형에서 accuracy/plain AUC보다 양성 클래스 성능을 잘 반영.
+        tree_method="hist",     # 히스토그램 기반 분할 탐색 + 카테고리 dtype 지원에 필요.
+        enable_categorical=True,  # category dtype 컬럼(number_type 등)을 원-핫 없이 직접 학습.
+        random_state=42,        # 재현성 고정(다른 seed들과 마찬가지로 값 자체보다 고정 여부가 중요).
     )
 
+    if val is not None:
+        # 최종 모드: 검증셋으로 조기종료(val 존재함) -> n_estimators=300까지 다 안 돌고 검증 성능이
+        # 20라운드 연속 개선 안 되면 멈춤(과적합 방지, 학습 시간 단축).
+        X_val = val[feature_cols].copy()
+        X_val[categorical_cols] = X_val[categorical_cols].astype("category")
+        y_val = val["is_phishing"]
 
-def evaluate(model, df):
+        model.set_params(early_stopping_rounds=20)
+        model.fit(X, y, eval_set=[(X_val, y_val)], verbose=False)
+    else:
+        # K-Fold 모드(민감도 분석): val 없이 표준 방식대로 n_estimators 고정 학습.
+        model.fit(X, y)
+
+    return model
+
+
+def evaluate(model, df, feature_cols=None):
     # 평가를 위한 함수.
     # accuracy / precision / recall / F1 / confusion_matrix / feature importance 반환.
+    # feature_cols: train_model()과 동일한 컬럼 목록을 넘겨야 함(Track 시나리오 일치 필요).
     from sklearn.metrics import (
         accuracy_score,
         precision_score,
@@ -47,9 +94,18 @@ def evaluate(model, df):
     )
     from Simulator.schema_utils import get_feature_columns
 
-    feature_cols = get_feature_columns()
-    X = df[feature_cols]
+    feature_cols = feature_cols or get_feature_columns()
+    # 방어적 필터: feature_cols에 is_feature=False인 컬럼이 섞여 들어와도 한 번 더 걸러냄.
+    valid_cols = set(get_feature_columns())
+    feature_cols = [c for c in feature_cols if c in valid_cols]
+    X = df[feature_cols].copy()
     y = df["is_phishing"]
+
+    # train_model()과 동일하게 문자열(범주형) 컬럼을 category dtype으로 맞춰줘야
+    # enable_categorical=True로 학습된 모델의 predict()가 받아들임.
+    categorical_cols = X.select_dtypes(include="object").columns
+    X[categorical_cols] = X[categorical_cols].astype("category")
+
     pred = model.predict(X)
 
     return {
