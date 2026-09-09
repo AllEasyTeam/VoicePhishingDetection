@@ -24,12 +24,13 @@ def split_data(df):
     return train, validation, test
 
 
-def train_model(df):
+def train_model(df, val=None):
     # 학습을 위한 함수. (model : xgboost)
+    # val: 선택적 검증셋. 최종 모드(main.py)는 넘겨서 조기종료/모니터링에 사용,
+    # K-Fold(sensitivity_analysis.py)는 안 넘김(표준 K-Fold 방식).
     import xgboost as xgb
 
     model = xgb.XGBClassifier(
-        
     )
 
 
