@@ -1,4 +1,18 @@
 # 분할->학습->평가 모두 한 번에 처리하는 파일.
+def prepare_categorical(df):
+    # XGBoost 학습/평가용 dtype 준비: 문자열(범주형) 컬럼을 category dtype으로 변환.
+    # train/val/test, K-Fold 등으로 나뉘기 "전" df 전체에 반드시 한 번만 호출해야 함.
+    # 분할 후 조각마다 따로 astype("category")하면 조각끼리 카테고리 코드북이 달라질 수 있어서
+    # (예: 특정 fold에 특정 범주가 우연히 하나도 없으면) XGBoost predict()에서
+    # "category not in the training set" 에러가 남. 슬라이싱(.iloc[])은 카테고리 목록을
+    # 새로 계산하지 않고 그대로 물려받으므로, 분할 전에 한 번만 하면 모든 조각이 동일한
+    # 카테고리 코드북을 공유하게 됨.
+    df = df.copy()
+    categorical_cols = df.select_dtypes(include="object").columns
+    df[categorical_cols] = df[categorical_cols].astype("category")
+    return df
+
+
 def split_data(df):
     # dataframe을 train, validation, test set으로 분할하는 함수.
     # train: 60%, validation: 20%, test: 20% 으로 분할.
@@ -42,8 +56,11 @@ def train_model(df, val=None, feature_cols=None):
     X = df[feature_cols].copy()
     y = df["is_phishing"]
 
-    # number_type/first_contact_type처럼 문자열(범주형) 컬럼은 XGBoost 네이티브 카테고리 처리를
-    # 쓰기 위해 dtype만 "category"로 바꿔줌 (원-핫 인코딩 대신, enable_categorical=True와 짝).
+    # 실제 category dtype 변환은 prepare_categorical()이 분할 전에 이미 끝내둠(fold 간
+    # 카테고리 코드북을 통일하기 위함). 여기 있는 건 그걸 거치지 않고 바로 호출된 경우를 위한
+    # 방어용 fallback일 뿐 -> object 컬럼이 남아있을 때만 동작(보통은 이미 없어서 no-op).
+    # 주의: 이 fallback은 dtype이 아예 안 맞는 경우만 막아주고, prepare_categorical() 없이
+    # train_fold/val_fold를 따로 변환하면 fold 간 카테고리 코드북이 어긋나는 문제(원래 버그)는 못 막음.
     categorical_cols = X.select_dtypes(include="object").columns
     X[categorical_cols] = X[categorical_cols].astype("category")
 
@@ -101,8 +118,10 @@ def evaluate(model, df, feature_cols=None):
     X = df[feature_cols].copy()
     y = df["is_phishing"]
 
-    # train_model()과 동일하게 문자열(범주형) 컬럼을 category dtype으로 맞춰줘야
-    # enable_categorical=True로 학습된 모델의 predict()가 받아들임.
+    # train_model()과 동일하게, 실제 category dtype 변환은 prepare_categorical()이 분할 전에
+    # 이미 끝내둠. 여기 있는 건 그걸 거치지 않고 바로 호출된 경우를 위한 방어용 fallback일 뿐
+    # (보통은 이미 category라 no-op) -> fold 간 카테고리 코드북 불일치 문제는 못 막으니
+    # 반드시 prepare_categorical()을 먼저 거쳐야 함.
     categorical_cols = X.select_dtypes(include="object").columns
     X[categorical_cols] = X[categorical_cols].astype("category")
 

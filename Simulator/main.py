@@ -3,7 +3,7 @@
 
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
-from Simulator.Detection.train_eval import split_data, train_model, evaluate
+from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical
 from Simulator.Detection.sensitivity_analysis import run_sensitivity
 from Simulator.schema import Track
 from Simulator.schema_utils import get_feature_columns
@@ -51,6 +51,7 @@ def run_final():
         random_state=GEN_SEED,
         config=config,
     )
+    df = prepare_categorical(df)  # train/val/test로 나뉘기 전에 category dtype 한 번만 확정
 
     train_set, val_set, test_set = split_data(df) # train/validation/test 3분할
 
@@ -76,6 +77,17 @@ def run_sensitivity_mode():
             n=N,
             subgroup_ratio_key=SUBGROUP_RATIO_KEY,
         )
+
+    # RELATION_TYPE_RATIO(정상 이벤트 하위집단 지인:기관 비중, A~E) 스윕.
+    # sophistication 기반이 아니라 build_dataset()의 subgroup_ratio_key 자체를 바꾸는 축이라 별도 호출.
+    result["subgroup_ratio_key"] = run_sensitivity(
+        param_name="subgroup_ratio_key",
+        candidate_values=list(config.RELATION_TYPE_RATIO.keys()),  # ["A", "B", "C", "D", "E"]
+        fixed_config=config,
+        sweep_target="subgroup_ratio_key",
+        phishing_rate=config.CLASS_IMBALANCE,
+        n=N,
+    )
 
     return result
 
