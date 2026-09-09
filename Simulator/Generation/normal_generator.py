@@ -75,19 +75,13 @@ def _generate_normal_phone(subgroup: str, config, soph: str) -> str:
 
 
 def _calculate_repeat_gap(group_key: str, config, sophistication: Union[str, Dict[str, str]]) -> float:
-    """NORMAL_REPEAT_GAP 혼합분포로 재연락 간격(분) 계산."""
+    """NORMAL_REPEAT_GAP 혼합분포로 재연락 간격(분) 계산.
+    호출 자체는 generate_normal_event()의 has_repeat_contact가 이미 게이트했으므로,
+    여기서는(지인/기관 모두) 항상 값을 계산해서 반환함(별도의 내부 발생확률 체크 없음)."""
     gap_soph = _get_soph(sophistication, config.SOPH_REPEAT_GAP)
     cfg = config.NORMAL_REPEAT_GAP[group_key]
-
-    if group_key == config.SUBGROUP_ACQUAINTANCE:
-        theta = random.choices(cfg["theta_list"], weights=cfg["p_list"])[0]
-        return round(np.random.exponential(scale=theta * cfg["배율"][gap_soph]), 2)
-
-    # 기관: 1단계 발생확률 → 2단계 혼합분포
-    if random.random() < cfg["발생확률"][gap_soph]:
-        theta = random.choices(cfg["theta_list"], weights=cfg["p_list"])[0]
-        return round(np.random.exponential(scale=theta * cfg["배율"][gap_soph]), 2)
-    return np.nan
+    theta = random.choices(cfg["theta_list"], weights=cfg["p_list"])[0]
+    return round(np.random.exponential(scale=theta * cfg["배율"][gap_soph]), 2)
 
 
 def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict[str, str]] = "mid") -> dict:
@@ -120,7 +114,15 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
     has_prior_history = 1 if random.random() < config.NORMAL_HAS_PRIOR_HISTORY[group_key] else 0  # 사건 간(독립적, 하위 컬럼 게이트 안 함)
 
     # 4. 재연락 간격 (규칙 1: 사건 내 반복 접촉 없으면 NaN)
-    has_repeat_contact = 1 if random.random() < config.NORMAL_HAS_REPEAT_CONTACT[group_key] else 0  # 사건 내(repeat_gap 게이트)
+    # NORMAL_HAS_REPEAT_CONTACT: 현재는 지인/기관 둘 다 sophistication(LOW/MID/HIGH) 구조.
+    # (혹시 나중에 flat 값으로 바뀌어도 깨지지 않도록 dict 여부는 방어적으로 확인)
+    repeat_contact_cfg = config.NORMAL_HAS_REPEAT_CONTACT[group_key]
+    if isinstance(repeat_contact_cfg, dict):
+        repeat_contact_soph = _get_soph(sophistication, config.SOPH_REPEAT_CONTACT)
+        repeat_contact_prob = repeat_contact_cfg[repeat_contact_soph]
+    else:
+        repeat_contact_prob = repeat_contact_cfg
+    has_repeat_contact = 1 if random.random() < repeat_contact_prob else 0  # 사건 내(repeat_gap 게이트)
     if has_repeat_contact == 1:
         repeat_gap = _calculate_repeat_gap(group_key, config, sophistication)
     else:

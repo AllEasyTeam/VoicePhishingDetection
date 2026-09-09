@@ -52,7 +52,8 @@ SUBGROUP_INSTITUTION_CORPORATE = "subgroup_institution_corporate" # 기관_기�
 # ============================================================
 SOPH_NUMBER_TYPE_BAND = "number_type_band"          # 발신번호_종류_대역
 SOPH_FIRST_CONTACT = "first_contact"                # 문자선행개시
-SOPH_REPEAT_GAP = "repeat_gap"                      # 재연락_간격 (정상 전용)
+SOPH_REPEAT_GAP = "repeat_gap"                      # 재연락_간격(배율/theta 크기, 정상 전용)
+SOPH_REPEAT_CONTACT = "repeat_contact"              # 사건 내 반복 접촉 존재확률(정상+피싱 공용)
 SOPH_NUM_IN_MSG = "num_in_msg"                      # 문자내_번호_포함확률
 SOPH_INNER_NUM_DIFFERS = "inner_num_differs"        # 발신번호_문자내번호_불일치율
 SOPH_MSG_OFFICIAL_MATCH = "msg_official_match"      # 문자내_번호_대표번호_일치율
@@ -386,9 +387,8 @@ NORMAL_REPEAT_GAP = {
         "배율": {LOW: 0.5, MID: 1.0, HIGH: 2.0}, #theta_list에 적용
     },
     SUBGROUP_INSTITUTION: {
-        # 1단계: 재연락이 아예 발생하는지 (θ와 독립적인 별도 파라미터)
-        "발생확률": {LOW: 0.05, MID: 0.15, HIGH: 0.30},
-        # 2단계: 발생확률을 통과했을 때만 사용하는 혼합분포
+        # "발생확률"(재연락이 아예 발생하는지)은 NORMAL_HAS_REPEAT_CONTACT[SUBGROUP_INSTITUTION]로
+        # 이동함(has_repeat_contact가 이미 그 역할을 게이트로 담당 -> 여기서 중복으로 안 둠).
         "theta_list": [15, 60, 240],           # 15분/1시간/4시간 대표값
         "p_list": [0.3, 0.4, 0.3],
         "배율": {LOW: 0.5, MID: 1.0, HIGH: 2.0}, #theta_list에 적용
@@ -397,7 +397,7 @@ NORMAL_REPEAT_GAP = {
 
 # 재발신/재연락 3구간 혼합분포 (참고용 초안; 생성기는 PHISHING_REPEAT_GAP 사용)
 PHISHING_REPEAT_CONTACT = {
-    "대출사기형": {
+    LOAN: {
         "theta_list": [623, 2077, 5194],    # (실측 θ값)
         "p_list": [0.09, 0.57, 0.34],       # (건수 가중치)
         "배율": {"LOW": 0.5, "MID": 1.0, "HIGH": 2.0}, #
@@ -462,11 +462,13 @@ PHISHING_HAS_PRIOR_HISTORY = 0.02 # 거의 항상 이력 없음(예외적 경우
 
 # ============================================================
 # 사건 내 반복 접촉 여부 (has_prior_history와 분리된 축: 같은 사건 "안"에서 재연락이 있었는지,
-# repeat_gap의 게이트 조건). 아직 별도 실측 근거가 없어 has_prior_history와 동일한 값으로
-# 시작함 -> 추후 실제 판결문 재검토해서 별도 값으로 보정 필요.
+# repeat_gap의 게이트 조건).
 # ============================================================
-NORMAL_HAS_REPEAT_CONTACT = {SUBGROUP_ACQUAINTANCE: 0.95, SUBGROUP_INSTITUTION: 0.02}
-PHISHING_HAS_REPEAT_CONTACT = 0.02
+NORMAL_HAS_REPEAT_CONTACT = {
+    SUBGROUP_ACQUAINTANCE: {LOW: 0.5, MID: 0.7, HIGH: 0.9},
+    SUBGROUP_INSTITUTION: {LOW: 0.05, MID: 0.15, HIGH: 0.30},
+}
+PHISHING_HAS_REPEAT_CONTACT = {LOW: 0.3, MID: 0.5, HIGH: 0.7}
 
 
 # ============================================================

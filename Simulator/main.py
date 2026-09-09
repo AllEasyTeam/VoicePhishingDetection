@@ -29,7 +29,8 @@ TRACK_SCENARIOS = {
 SENSITIVITY_PARAMS = [
     config.SOPH_NUMBER_TYPE_BAND,
     config.SOPH_FIRST_CONTACT,
-    config.SOPH_REPEAT_GAP,          # 정상 전용 (피싱 쪽엔 sophistication 분기 없음)
+    config.SOPH_REPEAT_GAP,          # 정상 전용 (재연락 간격 배율/theta 크기)
+    config.SOPH_REPEAT_CONTACT,      # 정상+피싱 공용 (사건 내 반복 접촉 존재확률)
     config.SOPH_NUM_IN_MSG,
     config.SOPH_INNER_NUM_DIFFERS,
     config.SOPH_MSG_OFFICIAL_MATCH,
