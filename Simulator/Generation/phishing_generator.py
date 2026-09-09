@@ -39,7 +39,7 @@ def _phone_from_category(category: str) -> str:
         return "010" + _digits(8)
     if category == "특번":
         return random.choice(["15", "16", "18"]) + _digits(6)
-    if category == "02(유선)":
+    if category == "02(서울 유선)":
         return "02" + str(random.randint(1, 9)) + _digits(random.choice([6, 7]))
     if category == "070(인터넷전화)":
         return "070" + _digits(random.randint(5, 8))
