@@ -135,7 +135,9 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     in_contacts = 1 if random.random() < config.PHISHING_IN_CONTACTS else 0
     has_prior_history = 1 if random.random() < config.PHISHING_HAS_PRIOR_HISTORY else 0  # 사건 간(독립적, 하위 컬럼 게이트 안 함)
 
-    has_repeat_contact = 1 if random.random() < config.PHISHING_HAS_REPEAT_CONTACT else 0  # 사건 내(repeat_gap 게이트)
+    # PHISHING_HAS_REPEAT_CONTACT가 LOW/MID/HIGH 구조로 바뀜 -> sophistication 조회 필요.
+    repeat_contact_soph = _get_soph(sophistication, config.SOPH_REPEAT_CONTACT)
+    has_repeat_contact = 1 if random.random() < config.PHISHING_HAS_REPEAT_CONTACT[repeat_contact_soph] else 0  # 사건 내(repeat_gap 게이트)
     if has_repeat_contact == 1:
         # 사건 내 반복 접촉이 존재 => 재연락 간격이 존재할 수 있음. (게이트 조건)
         gap_cfg = config.PHISHING_REPEAT_GAP[p_type]
