@@ -17,7 +17,7 @@ GEN_SEED = 42              # build_dataset()용 random_state
 # Track별 접근 가능 feature 시나리오 (누적 구조: 통신사가 가장 넓은 범위에 접근 가능).
 # 최종 dataset 1개를 그대로 두고, 시나리오별로 사용하는 컬럼만 달라짐.
 TRACK_SCENARIOS = {
-    "A": [Track.CARRIER, Track.DEVICE, Track.DEVICE_STRUCTURAL],  # 통신사: A+B+C 전부 접근 가능
+   # "A": [Track.CARRIER, Track.DEVICE, Track.DEVICE_STRUCTURAL],  # 통신사: A+B+C 전부 접근 가능 (현재로써는 접근 가능한 데이터 X)
     "B": [Track.DEVICE],                                          # 단말: B만 접근 가능
     "C": [Track.DEVICE, Track.DEVICE_STRUCTURAL],                 # 단말+구조적신호: B+C 접근 가능
 }

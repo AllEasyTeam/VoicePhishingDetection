@@ -130,17 +130,19 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
 
 
     # 3. 저장 및 과거 이력
-    # column 중 "in_contacts", "has_prior_history", "repeat_gap" 값 확정
+    # column 중 "in_contacts", "has_prior_history", "has_repeat_contact", "repeat_gap" 값 확정
     in_contacts = 1 if random.random() < config.PHISHING_IN_CONTACTS else 0
-    has_prior_history = 1 if random.random() < config.PHISHING_HAS_PRIOR_HISTORY else 0
-    if has_prior_history == 1:
-        # 과거 통화 이력이 존재 => 재연락 간격이 존재할 수 있음. (게이트 조건)
+    has_prior_history = 1 if random.random() < config.PHISHING_HAS_PRIOR_HISTORY else 0  # 사건 간(독립적, 하위 컬럼 게이트 안 함)
+
+    has_repeat_contact = 1 if random.random() < config.PHISHING_HAS_REPEAT_CONTACT else 0  # 사건 내(repeat_gap 게이트)
+    if has_repeat_contact == 1:
+        # 사건 내 반복 접촉이 존재 => 재연락 간격이 존재할 수 있음. (게이트 조건)
         gap_cfg = config.PHISHING_REPEAT_GAP[p_type]
         theta = random.choices(gap_cfg["theta_list"], weights=gap_cfg["p_list"])[0]
         repeat_gap = round(np.random.exponential(scale=theta), 2)
     else:
-        # 과거 통화 이력 존재 X => 재연락 간격 존재 X (NaN 처리)
-        repeat_gap = np.nan 
+        # 사건 내 반복 접촉 존재 X => 재연락 간격 존재 X (NaN 처리)
+        repeat_gap = np.nan
 
 
     # 4. 문자 내 번호 및 불일치 (Track C)
@@ -217,6 +219,7 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
         "hour_bucket": hour_bucket,
         "first_contact_type": first_contact_type,
         "has_prior_history": has_prior_history,
+        "has_repeat_contact": has_repeat_contact,
         "repeat_gap": repeat_gap,
         "in_contacts": in_contacts,
         "is_num_in_msg": is_num_in_msg,

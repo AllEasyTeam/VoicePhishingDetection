@@ -116,10 +116,11 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
 
     # 3. 연락처 저장 및 과거 통화 이력
     in_contacts = 1 if random.random() < config.NORMAL_IN_CONTACTS[group_key] else 0
-    has_prior_history = 1 if random.random() < config.NORMAL_HAS_PRIOR_HISTORY[group_key] else 0
+    has_prior_history = 1 if random.random() < config.NORMAL_HAS_PRIOR_HISTORY[group_key] else 0  # 사건 간(독립적, 하위 컬럼 게이트 안 함)
 
-    # 4. 재연락 간격 (규칙 1: 과거 통화 이력 없으면 NaN)
-    if has_prior_history == 1:
+    # 4. 재연락 간격 (규칙 1: 사건 내 반복 접촉 없으면 NaN)
+    has_repeat_contact = 1 if random.random() < config.NORMAL_HAS_REPEAT_CONTACT[group_key] else 0  # 사건 내(repeat_gap 게이트)
+    if has_repeat_contact == 1:
         repeat_gap = _calculate_repeat_gap(group_key, config, sophistication)
     else:
         repeat_gap = np.nan
@@ -177,6 +178,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         "hour_bucket": hour_bucket,
         "first_contact_type": first_contact_type,
         "has_prior_history": has_prior_history,
+        "has_repeat_contact": has_repeat_contact,
         "repeat_gap": repeat_gap,
         "in_contacts": in_contacts,
         "is_num_in_msg": is_num_in_msg,

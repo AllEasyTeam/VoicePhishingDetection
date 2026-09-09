@@ -1,10 +1,10 @@
 """
 schema_columns.py — 실제 21개 컬럼 데이터.
 
-역할: schema.py의 ColumnSchema 틀을 이용해, 실제 컬럼 21개를 채워넣은 목록.    
+역할: schema.py의 ColumnSchema 틀을 이용해, 실제 컬럼 24개를 채워넣은 목록.
       컬럼 추가/수정 시 이 파일만 건드리면 됨.
 
-Row 단위: 1 row = 1 사건(피해자 경험 전체 요약). 1개 번호가 아님.
+Row 단위: 1 row = 1 사건(경험 전체 요약). 1개 번호가 아님.
   복수 번호·복수 문자/통화가 있어도 그 전체를 한 row로 요약.
   단일값이 필요한 컬럼은 "이 사건 첫 이벤트" 기준 (phone_number / first_contact_type 등).
 
@@ -29,26 +29,28 @@ SCHEMA: list[ColumnSchema] = [
 
     ColumnSchema("first_contact_type", "개시 채널(0:문자/1:통화)", ValueType.BINARY, Track.DEVICE),  # 사건 첫 이벤트 기준 (번호별 X)
 
-    ColumnSchema("has_prior_history", "과거 통화 이력", ValueType.BINARY, Track.DEVICE),  # 이 사건 기준
+    ColumnSchema("has_prior_history", "과거 통화 이력(사건 간: 이전 별도 접촉 여부)", ValueType.BINARY, Track.DEVICE),  # 사건 간(row 간) 개념. 독립 feature -> 하위 컬럼을 게이트하지 않음
+
+    ColumnSchema("has_repeat_contact", "사건 내 반복 접촉 여부", ValueType.BINARY, Track.DEVICE),  # 사건 내(한 row 안) 개념. repeat_gap의 게이트 조건
 
     ColumnSchema("repeat_gap", "재연락 간격(통화 간의 간격, 분 단위)",
                  ValueType.CONTINUOUS_TIME, Track.DEVICE,
                  nullable=True,
-                 depends_on="has_prior_history = 0이면 간격 성립 안 함(NaN)"),  # 이 사건 안 연락 간격 (같은 번호 한정 X)
+                 depends_on="has_repeat_contact = 0이면 간격 성립 안 함(NaN)"),  # 이 사건 안 연락 간격 (같은 번호 한정 X)
 
     ColumnSchema("in_contacts", "번호 저장 여부", ValueType.BINARY, Track.DEVICE),  # 대표번호 기준
 
-    ColumnSchema("is_num_in_msg", "문자 내 번호 포함 여부", ValueType.BINARY, Track.DEVICE_STRUCTURAL),
+    ColumnSchema("is_num_in_msg", "문자 내 번호 포함 여부", ValueType.BINARY, Track.DEVICE_STRUCTURAL),  # 사건 내 그런 문자가 있었는지(존재 여부)
 
     ColumnSchema("inner_num_differs", "발신번호-문자내번호 불일치",
                  ValueType.BINARY, Track.DEVICE_STRUCTURAL,
                  nullable=True,
-                 depends_on="is_num_in_msg=0이면 비교대상 없음(NaN)"),
+                 depends_on="is_num_in_msg=0이면 비교대상 없음(NaN)"),  # 사건 내 그런 불일치가 있었는지(존재 여부)
 
     ColumnSchema("msg_number_official_match", "문자 내 번호-대표번호 일치 여부",
                  ValueType.BINARY, Track.DEVICE_STRUCTURAL,
                  nullable=True,
-                 depends_on="is_num_in_msg=0이면 비교대상 없음(NaN)"),
+                 depends_on="is_num_in_msg=0이면 비교대상 없음(NaN)"),  # 사건 내 그런 일치가 있었는지(존재 여부)
 
     ColumnSchema("sms_to_call", "문자→통화 연계 여부", ValueType.BINARY, Track.DEVICE),  # 이 사건 전체 요약
 
@@ -57,17 +59,17 @@ SCHEMA: list[ColumnSchema] = [
                  nullable=True,
                  depends_on="sms_to_call=0이면 전환 자체가 없음(NaN)"),
 
-    ColumnSchema("is_url_in_msg", "(문자) URL 포함 여부", ValueType.BINARY, Track.DEVICE_STRUCTURAL),
+    ColumnSchema("is_url_in_msg", "(문자) URL 포함 여부", ValueType.BINARY, Track.DEVICE_STRUCTURAL),  # 사건 내 그런 문자가 있었는지(존재 여부)
 
     ColumnSchema("is_reliable_url", "(문자) URL 도메인 종류(신뢰/비신뢰)",
                  ValueType.BINARY, Track.DEVICE_STRUCTURAL,
                  nullable=True,
-                 depends_on="is_url_in_msg=0이면 도메인 자체가 없음(NaN)"),
+                 depends_on="is_url_in_msg=0이면 도메인 자체가 없음(NaN)"),  # 사건 내 그런 URL이 있었는지(존재 여부)
 
     ColumnSchema("has_appinstall_link", "(문자) 앱설치 유도(.apk 확장자)",
                  ValueType.BINARY, Track.DEVICE_STRUCTURAL,
                  nullable=True,
-                 depends_on="is_url_in_msg=0이면 .apk 여부 판정 불가(NaN)"),
+                 depends_on="is_url_in_msg=0이면 .apk 여부 판정 불가(NaN)"),  # 사건 내 그런 링크가 있었는지(존재 여부)
 
     ColumnSchema("is_carrier_altered", "발신번호 변작 여부", ValueType.BINARY,
                  Track.CARRIER, nullable=True,

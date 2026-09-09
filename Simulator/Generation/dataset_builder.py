@@ -125,7 +125,7 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
 
     # debug용으로 일부 column만 미리보기. schema 규칙과 무관함.
     preview_cols = [
-        "phone_number", "number_type", "has_prior_history", "repeat_gap", 
+        "phone_number", "number_type", "has_prior_history", "has_repeat_contact", "repeat_gap",
         "sms_to_call", "sms_to_call_gap", "is_url_in_msg", "has_appinstall_link",
         "is_sequential_callers", "is_phishing", "incident_type",
     ]
@@ -142,7 +142,7 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
     # 목적: schema_columns.py의 depends_on에 적힌 "게이트 컬럼이 0이면 하위 컬럼은 NaN이어야 함" 규칙이
     #       generator 코드에서 실제로 지켜지는지 확인. depends_on은 사람이 읽는 텍스트 설명일 뿐 실행 가능한
     #       조건이 아니라서 schema_utils로 자동화할 수 없고, 여기서 조건을 직접 재현해서 검사
-    rule1_prior = (df[df["has_prior_history"] == 0]["repeat_gap"].isna()).all()
+    rule1_prior = (df[df["has_repeat_contact"] == 0]["repeat_gap"].isna()).all()
     rule1_sms = (df[df["sms_to_call"] == 0]["sms_to_call_gap"].isna()).all()
     rule1_num = (df[df["is_num_in_msg"] == 0]["inner_num_differs"].isna()).all()
     rule1_url = (df[df["is_url_in_msg"] == 0][["is_reliable_url", "has_appinstall_link"]].isna()).all().all()
@@ -168,7 +168,7 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
 
     ok, fail = "PASS", "FAIL"
     print("1. [규칙 1] 선행 조건 미충족 시 NaN 처리:")
-    print(f"   - 과거이력 0건 -> repeat_gap NaN: {ok if rule1_prior else fail}")
+    print(f"   - 사건 내 반복 접촉 0건 -> repeat_gap NaN: {ok if rule1_prior else fail}")
     print(f"   - 연계 0 -> sms_to_call_gap NaN: {ok if rule1_sms else fail}")
     print(f"   - 문자 내 번호 0 -> inner_num_differs NaN: {ok if rule1_num else fail}")
     print(f"   - URL 0 -> 도메인/앱설치 링크 NaN: {ok if rule1_url else fail}")
