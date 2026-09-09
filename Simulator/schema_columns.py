@@ -19,7 +19,8 @@ SCHEMA: list[ColumnSchema] = [
 
     ColumnSchema("call_type", "발신/수신", ValueType.BINARY, Track.DEVICE),
 
-    ColumnSchema("hour_bucket", "활동 시간대", ValueType.CATEGORICAL, Track.DEVICE),
+    ColumnSchema("hour_bucket", "활동 시간대", ValueType.CATEGORICAL, Track.DEVICE, nullable=True,
+                 depends_on="피싱 기타(ETC) 유형은 표본 부족(n=2)으로 NaN"),
 
     ColumnSchema("first_contact_type", "개시 채널(문자/통화)", ValueType.BINARY, Track.DEVICE),
 
@@ -35,6 +36,11 @@ SCHEMA: list[ColumnSchema] = [
     ColumnSchema("is_num_in_msg", "문자 내 번호 포함 여부", ValueType.BINARY, Track.DEVICE_STRUCTURAL),
 
     ColumnSchema("inner_num_differs", "발신번호-문자내번호 불일치",
+                 ValueType.BINARY, Track.DEVICE_STRUCTURAL,
+                 nullable=True,
+                 depends_on="is_num_in_msg=0이면 비교대상 없음(NaN)"),
+
+    ColumnSchema("msg_number_official_match", "문자 내 번호-대표번호 일치 여부",
                  ValueType.BINARY, Track.DEVICE_STRUCTURAL,
                  nullable=True,
                  depends_on="is_num_in_msg=0이면 비교대상 없음(NaN)"),
@@ -61,6 +67,10 @@ SCHEMA: list[ColumnSchema] = [
     ColumnSchema("is_carrier_altered", "발신번호 변작 여부", ValueType.BINARY,
                  Track.CARRIER, nullable=True,
                  depends_on="통신사 실측자료 있는 사건만 값 존재, 대부분 NaN"),
+
+    ColumnSchema("number_cluster", "발신번호 유사성(클러스터링)", ValueType.BINARY,
+                 Track.CARRIER, nullable=True,
+                 depends_on="통신사 실측자료(다수 사건 비교) 있는 사건만 값 존재, 시뮬레이터에서는 항상 NaN"),
 
     ColumnSchema("using_duration", "번호 사용 기간(일 단위)",
                  ValueType.CONTINUOUS_TIME, Track.CARRIER, nullable=True,

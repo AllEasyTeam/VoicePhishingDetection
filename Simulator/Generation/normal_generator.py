@@ -76,7 +76,7 @@ def _generate_normal_phone(subgroup: str, config, soph: str) -> str:
 
 def _calculate_repeat_gap(group_key: str, config, sophistication: Union[str, Dict[str, str]]) -> float:
     """NORMAL_REPEAT_GAP 혼합분포로 재연락 간격(분) 계산."""
-    gap_soph = _get_soph(sophistication, "재연락_간격")
+    gap_soph = _get_soph(sophistication, config.SOPH_REPEAT_GAP)
     cfg = config.NORMAL_REPEAT_GAP[group_key]
 
     if group_key == config.SUBGROUP_ACQUAINTANCE:
@@ -97,7 +97,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
     sophistication: "low"|"mid"|"high" 또는 feature별 dict
     """
     group_key = _group_key(subgroup, config)
-    band_soph = _get_soph(sophistication, "발신번호_종류_대역")
+    band_soph = _get_soph(sophistication, config.SOPH_NUMBER_TYPE_BAND)
 
     # 1. 식별자 및 발신 대역 (Track B)
     phone_number = _generate_normal_phone(subgroup, config, band_soph)
@@ -110,7 +110,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
     hour_bucket = base_time.hour
     call_type = random.choice([0, 1])  # 0: 발신, 1: 수신
 
-    contact_soph = _get_soph(sophistication, "문자선행개시")
+    contact_soph = _get_soph(sophistication, config.SOPH_FIRST_CONTACT)
     sms_prob = config.NORMAL_FIRST_CONTACT_TYPE_SMS[group_key][contact_soph]
     first_contact_type = "sms" if random.random() < sms_prob else "call"
 
@@ -126,19 +126,23 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
 
     # 5. 문자 내 번호 포함 및 불일치 (Track C)
     # NORMAL_INNER_NUM_DIFFERS 는 이미 불일치율
-    num_in_msg_soph = _get_soph(sophistication, "문자내_번호_포함확률")
+    num_in_msg_soph = _get_soph(sophistication, config.SOPH_NUM_IN_MSG)
     is_num_in_msg = 1 if random.random() < config.NORMAL_IS_NUM_IN_MSG[num_in_msg_soph] else 0
 
     if is_num_in_msg == 1:
-        differ_soph = _get_soph(sophistication, "발신번호_문자내번호_불일치율")
+        differ_soph = _get_soph(sophistication, config.SOPH_INNER_NUM_DIFFERS)
         inner_num_differs = 1 if random.random() < config.NORMAL_INNER_NUM_DIFFERS[differ_soph] else 0
+
+        official_soph = _get_soph(sophistication, config.SOPH_MSG_OFFICIAL_MATCH)
+        msg_number_official_match = 1 if random.random() < config.NORMAL_MSG_NUMBER_OFFICIAL_MATCH[official_soph] else 0
     else:
         inner_num_differs = np.nan  # 규칙 1
+        msg_number_official_match = np.nan  # 규칙 1
 
     # 6. 문자 -> 통화 연계 및 간격 (Track B)
     sms_to_call = 1 if (first_contact_type == "sms" and random.random() < config.NORMAL_SMS_TO_CALL) else 0
     if sms_to_call == 1:
-        gap_soph = _get_soph(sophistication, "문자_통화_간격")
+        gap_soph = _get_soph(sophistication, config.SOPH_SMS_TO_CALL_GAP)
         gap_cfg = config.NORMAL_SMS_TO_CALL_GAP
         theta = random.choices(gap_cfg["theta_list"], weights=gap_cfg["p_list"])[0]
         sms_to_call_gap = round(np.random.exponential(scale=theta * gap_cfg["배율"][gap_soph]), 2)
@@ -146,23 +150,24 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         sms_to_call_gap = np.nan  # 규칙 1
 
     # 7. URL 및 앱 설치 유도 (Track C)
-    url_soph = _get_soph(sophistication, "URL_존재확률")
+    url_soph = _get_soph(sophistication, config.SOPH_URL_RATE)
     is_url_in_msg = 1 if random.random() < config.NORMAL_IS_URL_IN_MSG[url_soph] else 0
 
     if is_url_in_msg == 1:
         is_reliable_url = 1 if random.random() < config.NORMAL_IS_RELIABLE_URL else 0
-        app_soph = _get_soph(sophistication, "앱설치_유도")
+        app_soph = _get_soph(sophistication, config.SOPH_APP_INSTALL)
         has_appinstall_link = 1 if random.random() < config.NORMAL_HAS_APPINSTALL_LINK[app_soph] else 0
     else:
         is_reliable_url = np.nan    # 규칙 1
         has_appinstall_link = np.nan # 규칙 1
 
     # 8. 순차복수사칭 및 Track A 전용 결측치 (규칙 특수: 0 채움 / 규칙 4: NaN)
-    seq_soph = _get_soph(sophistication, "순차복수사칭")
+    seq_soph = _get_soph(sophistication, config.SOPH_SEQUENTIAL_CALLERS)
     is_sequential_callers = 1 if random.random() < config.NORMAL_IS_SEQUENTIAL_CALLERS[seq_soph] else 0
     is_carrier_altered = np.nan
     using_duration = np.nan
     unique_callees = np.nan
+    number_cluster = np.nan  # 다수 사건 비교(통신사 실측자료) 필요 -> 시뮬레이터에서는 항상 NaN
 
     return {
         "phone_number": phone_number,
@@ -176,6 +181,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         "in_contacts": in_contacts,
         "is_num_in_msg": is_num_in_msg,
         "inner_num_differs": inner_num_differs,
+        "msg_number_official_match": msg_number_official_match,
         "sms_to_call": sms_to_call,
         "sms_to_call_gap": sms_to_call_gap,
         "is_url_in_msg": is_url_in_msg,
@@ -184,6 +190,7 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         "is_carrier_altered": is_carrier_altered,
         "using_duration": using_duration,
         "unique_callees": unique_callees,
+        "number_cluster": number_cluster,
         "is_global": is_global,
         "is_sequential_callers": is_sequential_callers
     }

@@ -17,7 +17,15 @@ _SOPH_ALIAS = {
 
 
 def _get_soph(soph: Union[str, Dict[str, str]], key: str) -> str:
+    """sophistication 값을 "이 feature 기준으로" 최종 확정하는 함수."""
+    # ex1) "high" 와 같은 형태의 입력 => 모든 feature에 동일하게 적용.
+    # ex2) {"발신번호_종류_대역": "low"} 와 같은 형태의 입력 => key에 해당하는 feature만 적용.
+
+    # soph이 dict이면 (ex2) key에 해당하는 feature만 적용. 없으면 "mid"로 기본값 처리.
+    # soph이 dict이 아니라면(ex1) 문자열 그대로 적용.
     raw = soph.get(key, "mid") if isinstance(soph, dict) else soph
+
+    # _SOPH_ALIAS 통해 최종적으로 "low", "mid", "high" 중 하나로 정규화.
     return _SOPH_ALIAS.get(raw, "mid")
 
 
@@ -46,6 +54,7 @@ def _phone_from_category(category: str) -> str:
 
 
 def _pick_from_call_band(config, soph: str) -> str:
+    """확률분포를 이용해 발신번호 카테고리(발신번호_종류_대역)를 뽑는 함수."""
     band = config.PHISHING_CALL_NUMBER_TYPE
     cats = list(band.keys())
     return random.choices(cats, weights=[band[c][soph] for c in cats])[0]
@@ -57,19 +66,29 @@ def _generate_phishing_phone(
     sophistication: Union[str, Dict[str, str]],
     config,
 ) -> str:
-    """PHISHING_SMS_NUMBER_TYPE / PHISHING_CALL_NUMBER_TYPE 비중으로 발신번호 생성."""
-    soph = _get_soph(sophistication, "발신번호_종류_대역")
+    """PHISHING_SMS_NUMBER_TYPE(발신번호_종류_대역 - 문자) / PHISHING_CALL_NUMBER_TYPE(발신번호_종류_대역 - 통화) 비중으로 발신번호 생성."""
+    # p_type: 피싱 유형(loan/institution/acquaintance/etc)
+    # first_contact_type: 개시 채널(문자/sms or 통화/call)
+
+    soph = _get_soph(sophistication, config.SOPH_NUMBER_TYPE_BAND)
+
+    '''이 피싱 유형이 "문자로" 발신번호를 보낼 때 쓰는 확률분포(PHISHING_SMS_NUMBER_TYPE) 가져오기. 
+    -> acquaintance: {"010": 0.99, "기타": 0.01} 처럼 flat
+    -> 그 외 유형: PHISHING_CALL_NUMBER_TYPE 차용해서 동일하게 사용. (카테고리 → {low/mid/high})'''    
     sms_band = config.PHISHING_SMS_NUMBER_TYPE.get(p_type)
 
+    # 개시 채널이 문자이고, sms_band가 dict이면(= 해당 피싱 유형이 문자 발신번호 확률분포를 갖는 경우) sms_band에서 확률분포에 따라 발신번호 카테고리 뽑기.
+    # 그 외에는, PHISHING_CALL_NUMBER_TYPE에서 확률분포에 따라 발신번호 카테고리 뽑기.
     if first_contact_type == "sms" and isinstance(sms_band, dict):
-        # acquaintance: {"010": 0.99, "기타": 0.01} 처럼 flat
-        # 그 외: PHISHING_CALL_NUMBER_TYPE 차용 (카테고리 → {low/mid/high})
         sample = next(iter(sms_band.values()), None)
         if isinstance(sample, (int, float)):
+            # acquaintance 같이 flat(민감도 분석 X)인 경우, 바로 확률로 뽑기.
             kind = random.choices(list(sms_band.keys()), weights=list(sms_band.values()))[0]
         else:
+            # 그 외에 "low", "mid", "high"와 같은 후보값이 있는 경우, PHISHING_CALL_NUMBER_TYPE 차용하므로 sophistication까지 모두 고려하도록 함수 호출.
             kind = _pick_from_call_band(config, soph)
     else:
+        # 개시 채널이 통화이거나, sms_band가 dict이 아닌 경우
         kind = _pick_from_call_band(config, soph)
     return _phone_from_category(kind)
 
@@ -79,7 +98,8 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     피싱 유형(loan/institution/acquaintance/etc)에 따른 이벤트 1건 생성.
     """
     # 1. 개시 채널 → 발신번호
-    contact_soph = _get_soph(sophistication, "문자선행개시")
+    # column 중 "first_contact_type", "phone_number", "number_type", "is_global" 값 확정.
+    contact_soph = _get_soph(sophistication, config.SOPH_FIRST_CONTACT)
     sms_prob = config.PHISHING_FIRST_CONTACT_TYPE_SMS[p_type][contact_soph]
     first_contact_type = "sms" if random.random() < sms_prob else "call"
 
@@ -87,64 +107,107 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     number_type = config.classify_number_type(phone_number)
     is_global = 1 if number_type == "00X(국제)" else 0
 
-    # 2. 통화/문자 시간 및 기본 속성 (규칙 3: 항상 관측)
-    base_time = datetime(2026, 1, 1) + timedelta(minutes=random.randint(0, 525600))
-    call_time = base_time.strftime("%Y-%m-%d %H:%M:%S")
-    hour_bucket = base_time.hour
+
+    # 2. 통화/문자 시간 및 기본 속성 (call_time/call_type은 규칙 3: 항상 관측 / hour_bucket은 ETC만 결측)
+    # column 중 "call_time", "hour_bucket", "call_type" 값 확정
+    skew_prob = config.PHISHING_HOUR_BUCKET[p_type] 
+    if skew_prob is None:
+        # 보이스피싱 유형이 ETC인 경우(skew_prob이 None임)
+        hour = random.randint(0, 23)  # 근거 없음 -> 24시간 균등하게 선택.
+    elif random.random() < skew_prob:
+        # 9~18시 사이에 일어날 확률 -> hour 구하기
+        hour = random.randint(9, 17)  # 09~18시 사이
+    else:
+        # 9~18시 이외에 일어날 확률 -> hour 구하기
+        hour = random.choice([h for h in range(24) if not (9 <= h < 18)])  # 그 외 시간대
+
+    base_time = datetime(2026, 1, 1) + timedelta(
+        days=random.randint(0, 364), hours=hour, minutes=random.randint(0, 59)
+    )
+    call_time = base_time.strftime("%Y-%m-%d %H:%M:%S")  # call_time은 항상 실제 시각을 가짐
+    hour_bucket = np.nan if skew_prob is None else hour   # ETC 유형만 hour_bucket 자체를 NaN 처리
     call_type = 1  # 수신 (피해자 단말 관점)
 
+
     # 3. 저장 및 과거 이력
+    # column 중 "in_contacts", "has_prior_history", "repeat_gap" 값 확정
     in_contacts = 1 if random.random() < config.PHISHING_IN_CONTACTS else 0
     has_prior_history = 1 if random.random() < config.PHISHING_HAS_PRIOR_HISTORY else 0
     if has_prior_history == 1:
+        # 과거 통화 이력이 존재 => 재연락 간격이 존재할 수 있음. (게이트 조건)
         gap_cfg = config.PHISHING_REPEAT_GAP[p_type]
         theta = random.choices(gap_cfg["theta_list"], weights=gap_cfg["p_list"])[0]
         repeat_gap = round(np.random.exponential(scale=theta), 2)
     else:
-        repeat_gap = np.nan  # 규칙 1
+        # 과거 통화 이력 존재 X => 재연락 간격 존재 X (NaN 처리)
+        repeat_gap = np.nan 
+
 
     # 4. 문자 내 번호 및 불일치 (Track C)
-    num_soph = _get_soph(sophistication, "문자내_번호_포함확률")
+    # column 중 "is_num_in_msg", "inner_num_differs", "msg_number_official_match" 값 확정,
+    num_soph = _get_soph(sophistication, config.SOPH_NUM_IN_MSG)
     is_num_in_msg = 1 if random.random() < config.PHISHING_IS_NUM_IN_MSG[p_type][num_soph] else 0
 
     if is_num_in_msg == 1:
-        differ_soph = _get_soph(sophistication, "발신번호_문자내번호_불일치율")
+        # 문자 내 번호 포함 O => 발신번호-문자 내 번호 불일치 확인 가능.
+        differ_soph = _get_soph(sophistication, config.SOPH_INNER_NUM_DIFFERS)
         inner_num_differs = 1 if random.random() < config.PHISHING_INNER_NUM_DIFFERS[differ_soph] else 0
+
+        # 문자 내 번호 포함 O => 그 번호가 대표번호와 일치하는지도 확인 가능.
+        official_soph = _get_soph(sophistication, config.SOPH_MSG_OFFICIAL_MATCH)
+        msg_number_official_match = 1 if random.random() < config.PHISHING_MSG_NUMBER_OFFICIAL_MATCH[official_soph] else 0
     else:
+        # 문자 내 번호 포함 X => 두 비교 모두 불가능 (NaN 처리)
         inner_num_differs = np.nan
+        msg_number_official_match = np.nan
+
 
     # 5. 문자 -> 통화 연계 간격 (Track B)
-    sms_soph = _get_soph(sophistication, "문자_통화_연계")
+    # column 중 "sms_to_call", "sms_to_call_gap" 값 확정
+    sms_soph = _get_soph(sophistication, config.SOPH_SMS_TO_CALL)
     sms_to_call = 1 if (
+        # 문자 -> 통화 연계 여부는 "문자"로 시작해야 하므로 first_contact_type도 확인해야 함.
         first_contact_type == "sms"
         and random.random() < config.PHISHING_SMS_TO_CALL[p_type][sms_soph]
     ) else 0
     if sms_to_call == 1:
+        # 문자->통화 연계 O => 문자->통화 전환 간격 구하기
         theta = config.PHISHING_SMS_TO_CALL_GAP[p_type]
         sms_to_call_gap = round(np.random.exponential(scale=theta), 2)
     else:
+        # 문자->통화 연계 X => 문자->통화 전환 간격 존재 X (NaN 처리)
         sms_to_call_gap = np.nan
 
+
     # 6. URL 및 앱 설치 유도
+    # column 중 "is_url_in_msg", "is_reliable_url", "has_appinstall_link" 값 확정.
     url_rate = config.PHISHING_IS_URL_IN_MSG[p_type]
     is_url_in_msg = 1 if random.random() < url_rate else 0
 
     if is_url_in_msg == 1:
+        # 문자 내 url 존재 O => url 공식 도메인 확률 및 앱설치 유도 신호가 있는지 확인 가능.
         is_reliable_url = 1 if random.random() < config.PHISHING_IS_RELIABLE_URL else 0
-        app_soph = _get_soph(sophistication, "앱설치_유도")
+        app_soph = _get_soph(sophistication, config.SOPH_APP_INSTALL)
         has_appinstall_link = 1 if random.random() < config.PHISHING_HAS_APPINSTALL_LINK[p_type][app_soph] else 0
     else:
+        # 문자 내 url 존재 X => 모두 NaN 처리.
         is_reliable_url = np.nan
         has_appinstall_link = np.nan
 
+
     # 7. 순차복수사칭 (특수 규칙: 확정적 0 또는 1)
-    seq_soph = _get_soph(sophistication, "순차복수사칭")
+    # column 중 "is_sequential_callers" 값 확정
+    seq_soph = _get_soph(sophistication, config.SOPH_SEQUENTIAL_CALLERS)
     is_sequential_callers = 1 if random.random() < config.PHISHING_IS_SEQUENTIAL_CALLERS[p_type][seq_soph] else 0
 
+
     # 8. Track A 전용 feature (규칙 4: 통신사 데이터 부재로 NaN)
+    # column 중 "is_carrier_altered", "using_duration", "unique_callees", "number_cluster" 값 확정.
     is_carrier_altered = np.nan
     using_duration = np.nan
     unique_callees = np.nan
+    number_cluster = np.nan  
+
 
     return {
         "phone_number": phone_number,
@@ -158,6 +221,7 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
         "in_contacts": in_contacts,
         "is_num_in_msg": is_num_in_msg,
         "inner_num_differs": inner_num_differs,
+        "msg_number_official_match": msg_number_official_match,
         "sms_to_call": sms_to_call,
         "sms_to_call_gap": sms_to_call_gap,
         "is_url_in_msg": is_url_in_msg,
@@ -166,6 +230,7 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
         "is_carrier_altered": is_carrier_altered,
         "using_duration": using_duration,
         "unique_callees": unique_callees,
+        "number_cluster": number_cluster,
         "is_global": is_global,
         "is_sequential_callers": is_sequential_callers
     }

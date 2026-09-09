@@ -43,6 +43,25 @@ SUBGROUP_INSTITUTION_PERSONAL = "subgroup_institution_personal"  # 기관_개인
 SUBGROUP_INSTITUTION_CORPORATE = "subgroup_institution_corporate" # 기관_기업
 
 
+# ============================================================
+# sophistication 조회용 feature key 상수 선언
+# normal_generator.py / phishing_generator.py의 _get_soph(sophistication, key)
+# 호출부와 main.py의 SENSITIVITY_PARAMS가 공유해서 사용.
+# (한글 문자열을 직접 여러 곳에 반복 입력하면 오타가 나도 에러 없이
+#  "mid"로 조용히 넘어가므로, 상수로 선언해 오타 시 NameError로 즉시 드러나게 함)
+# ============================================================
+SOPH_NUMBER_TYPE_BAND = "number_type_band"          # 발신번호_종류_대역
+SOPH_FIRST_CONTACT = "first_contact"                # 문자선행개시
+SOPH_REPEAT_GAP = "repeat_gap"                      # 재연락_간격 (정상 전용)
+SOPH_NUM_IN_MSG = "num_in_msg"                      # 문자내_번호_포함확률
+SOPH_INNER_NUM_DIFFERS = "inner_num_differs"        # 발신번호_문자내번호_불일치율
+SOPH_MSG_OFFICIAL_MATCH = "msg_official_match"      # 문자내_번호_대표번호_일치율
+SOPH_SMS_TO_CALL_GAP = "sms_to_call_gap_soph"       # 문자_통화_간격 (정상 전용)
+SOPH_SMS_TO_CALL = "sms_to_call_soph"               # 문자_통화_연계 (피싱 전용)
+SOPH_URL_RATE = "url_rate"                          # URL_존재확률 (정상 전용)
+SOPH_APP_INSTALL = "app_install"                    # 앱설치_유도
+SOPH_SEQUENTIAL_CALLERS = "sequential_callers"      # 순차복수사칭
+
 
 # 전화번호 비교할 때 사용할 함수
 def normalize(number: str) -> str:
@@ -444,12 +463,11 @@ PHISHING_HAS_PRIOR_HISTORY = 0.02 # 거의 항상 이력 없음(예외적 경우
 # 활동시간대
 # ============================================================
 NORMAL_HOUR_BUCKET = {
-    "시간축_09_18시_비중": {LOW: 0.30, MID: 0.50, HIGH: 0.70}, # 9시-18시 사이에 발생할 확률
-    "요일축_평일_비중": {LOW: 0.50, MID: 0.65, HIGH: 0.80}, #주말, 평일 중 평일에 발생할 확률
-    "적용유형": [LOAN, INSTITUTION],  # 협박형·지인사칭형은 미적용(9시-18시 사이에 피싱이 많다는 건 "대출사기형", "기관사칭형" 유형에서만 확인된 사실.)
+ 
 }
 
 PHISHING_HOUR_BUCKET = {
+    # 09시~18시 비중.
     INSTITUTION: 0.944,  # n=36
     LOAN: 0.970,  # n=33
     ACQUAINTANCE: 0.80,   # n=4, 표본부족으로 100%에서 약간 낮춤(과신방지)
