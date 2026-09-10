@@ -44,6 +44,9 @@ SENSITIVITY_PARAMS = [
     config.SOPH_SMS_TO_CALL,         # 피싱 전용
 ]
 
+# mode="each_sen"일 때 확인할 feature 1개. 바꾸고 싶으면 이 줄만 수정(config.SOPH_* 중 하나).
+EACH_SENSITIVITY_PARAM = config.SOPH_NUMBER_TYPE_BAND
+
 
 def run_final():
     """최종 모드: 확정한 config 값으로 데이터셋 1개 생성 -> split_data() 2분할(train/test)
@@ -76,6 +79,7 @@ def run_sensitivity_mode():
     result = {}  # {param_name: run_sensitivity()의 반환값(summary 리스트)} 형태로 feature별 결과를 보관
 
     for param_name in SENSITIVITY_PARAMS:
+        # run_sensitivity() 안에서 sensitivity_results/<param_name>.json으로 자동 저장됨.
         result[param_name] = run_sensitivity(
             param_name=param_name,
             candidate_values=["low", "mid", "high"],
@@ -98,12 +102,36 @@ def run_sensitivity_mode():
 
     return result
 
+def run_sensitivity_each_feature_mode(param_name):
+    """각 feature에 대해 진행 가능하도록 하는 함수(run_sensitivity_mode()는 전체 feature에 대해서.)"""
+    # run_sensitivity() 안에서 sensitivity_results/<param_name>.json으로 자동 저장됨.
+    summary = run_sensitivity(
+        param_name = param_name,
+        candidate_values = ["low", "mid", "high"],
+        fixed_config=config,
+        phishing_rate = config.CLASS_IMBALANCE,
+        n = N,
+        subgroup_ratio_key=SUBGROUP_RATIO_KEY,
+    )
 
-def main(mode: str):
+    return summary
+
+
+def main(mode: str, param_name=None):
+    # param_name: mode="each_sen"일 때만 사용. 직접 Python으로 호출할 때만 넘기는 선택 인자이고,
+    # CLI(-m each_sen)로는 안 받음 -> 코드 상단의 EACH_SENSITIVITY_PARAM을 바꿔서 확인할 feature를 정함.
     if mode == "final":
         result = run_final()
-    elif mode == "sensitivity":
+    elif mode == "sen":
         result = run_sensitivity_mode()
+    elif mode == "each_sen":
+        param_name = param_name or EACH_SENSITIVITY_PARAM
+        # param_name이 SENSITIVITY_PARAMS(유효한 SOPH_* 값 목록)에 있는지 방어적으로 한 번 더 확인.
+        if param_name not in SENSITIVITY_PARAMS:
+            raise ValueError(
+                f"알 수 없는 param_name: {param_name!r}. SENSITIVITY_PARAMS 중 하나여야 함: {SENSITIVITY_PARAMS}"
+            )
+        result = run_sensitivity_each_feature_mode(param_name)
     else:
         raise ValueError(f"알 수 없는 mode: {mode}")
 
@@ -111,5 +139,23 @@ def main(mode: str):
     return result
 
 
+# 실행 방법 (프로젝트 루트에서):
+#   python -X utf8 -m Simulator.main              -> 기본값(mode=final)
+#   python -X utf8 -m Simulator.main -m final     -> 최종 dataset 생성 -> 학습 -> 평가 (Track B/C)
+#   python -X utf8 -m Simulator.main -m sen       -> SENSITIVITY_PARAMS 전체 + subgroup_ratio_key 스윕
+#                                                     (feature마다 sensitivity_results/<param_name>.json 자동 저장)
+#   python -X utf8 -m Simulator.main -m each_sen  -> feature 1개만 스윕(위 EACH_SENSITIVITY_PARAM 값 사용).
+#                                                     확인할 feature를 바꾸려면 CLI가 아니라 코드 상단의
+#                                                     EACH_SENSITIVITY_PARAM 줄을 직접 수정할 것.
+#   -m은 --mode의 짧은 별칭.
 if __name__ == "__main__":
-    main(mode="final")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Voice Phishing Detection 시뮬레이터 파이프라인 실행")
+    parser.add_argument(
+        "-m", "--mode", default="final", choices=["final", "sen", "each_sen"],
+        help="실행 모드 (기본값: final)",
+    )
+    args = parser.parse_args()
+
+    main(mode=args.mode)

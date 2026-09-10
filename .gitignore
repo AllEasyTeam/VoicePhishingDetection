@@ -5,3 +5,6 @@ venv/
 .env
 .myenv
 myenv/
+
+# 민감도 분석 결과물 (코드 실행하면 로컬에서 다시 생성됨, config.py 바뀔 때마다 값이 달라져서 커밋 대상 아님)
+sensitivity_results/

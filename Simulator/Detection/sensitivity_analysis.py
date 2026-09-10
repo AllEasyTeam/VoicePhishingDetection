@@ -1,9 +1,52 @@
 # 민감도 분석 진행을 위한 파일
+from pathlib import Path
 from typing import List, Optional
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.schema_utils import get_feature_columns
 from Simulator.Detection.train_eval import train_model, evaluate, prepare_categorical
 from sklearn.model_selection import StratifiedKFold
+
+# 결과 저장 폴더: 실행 위치(cwd)와 무관하게 항상 프로젝트 루트 기준으로 고정.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_RESULTS_DIR = _PROJECT_ROOT / "sensitivity_results"
+
+
+def summarize_fold_results(fold_results: List[dict]) -> dict:
+    """K-Fold 결과(fold_results, evaluate() 반환값 K개) 안의 스칼라 지표들을
+    평균/표준편차로 요약. confusion_matrix/classification_report/feature_importance처럼
+    스칼라가 아닌 건 저장 파일을 깔끔하게 유지하기 위해 요약에서 제외."""
+    import numpy as np
+
+    scalar_keys = [
+        "threshold", "accuracy", "precision", "recall", "f1",
+        "PR-AUC", "Lift@Top5%", "Lift@Top10%", "Lift@Top20%",
+    ]
+    summary = {}
+    for key in scalar_keys:
+        values = [fr[key] for fr in fold_results if key in fr]
+        if not values:
+            continue
+        summary[key] = {"mean": round(float(np.mean(values)), 4), "std": round(float(np.std(values)), 4)}
+    return summary
+
+
+def save_sensitivity_result(param_name: str, summary: List[dict], out_dir: Path = _RESULTS_DIR) -> Path:
+    """민감도 분석 결과(후보값별 요약 통계)를 sensitivity_results/<param_name>.json으로 저장.
+    같은 feature를 다시 실행하면 새 파일을 추가로 만들지 않고 덮어씀(항상 최신 결과만 유지)."""
+    import json
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "param_name": param_name,
+        "results": [
+            {"value": entry["value"], "summary": summarize_fold_results(entry["fold_results"])}
+            for entry in summary
+        ],
+    }
+    path = out_dir / f"{param_name}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return path
 
 
 def run_sensitivity(
@@ -80,5 +123,9 @@ def run_sensitivity(
             "value": value,
             "fold_results": fold_results,  # K개 fold의 evaluate() 결과 목록. 평균/표준편차 집계는 evaluate() 반환 형태 확정 후 추가.
         })
+
+    # 호출 경로(main.py를 거치든 직접 호출하든)와 상관없이 항상 동일하게 저장:
+    # 같은 param_name이면 sensitivity_results/<param_name>.json을 덮어쓰고, 없으면 새로 만듦.
+    save_sensitivity_result(param_name, summary)
 
     return summary
