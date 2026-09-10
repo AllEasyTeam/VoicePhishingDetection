@@ -20,11 +20,12 @@ def _get_soph(soph: Union[str, Dict[str, str]], key: str) -> str:
     """sophistication 값을 "이 feature 기준으로" 최종 확정하는 함수."""
     # ex1) "high" 와 같은 형태의 입력 => 모든 feature에 동일하게 적용.
     # ex2) {"발신번호_종류_대역": "low"} 와 같은 형태의 입력 => key에 해당하는 feature만 적용.
-
-    # soph이 dict이면 (ex2) key에 해당하는 feature만 적용. 없으면 "mid"로 기본값 처리.
-    # soph이 dict이 아니라면(ex1) 문자열 그대로 적용.
-    raw = soph.get(key, "mid") if isinstance(soph, dict) else soph
-
+    # soph이 dict이면 key값 우선, 없으면 __base__(민감도 base_sophistication), 그래도 없으면 mid.
+    # soph이 dict이 아니라면 문자열 그대로 적용.
+    if isinstance(soph, dict):
+        raw = soph[key] if key in soph else soph.get("__base__", "mid")
+    else:
+        raw = soph
     # _SOPH_ALIAS 통해 최종적으로 "low", "mid", "high" 중 하나로 정규화.
     return _SOPH_ALIAS.get(raw, "mid")
 

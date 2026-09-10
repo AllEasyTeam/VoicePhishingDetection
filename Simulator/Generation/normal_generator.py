@@ -19,7 +19,11 @@ _SOPH_ALIAS = {
 
 
 def _get_soph(soph: Union[str, Dict[str, str]], key: str) -> str:
-    raw = soph.get(key, "mid") if isinstance(soph, dict) else soph
+    # dict면 key값 우선, 없으면 __base__(민감도 base_sophistication), 그래도 없으면 mid
+    if isinstance(soph, dict):
+        raw = soph[key] if key in soph else soph.get("__base__", "mid")
+    else:
+        raw = soph
     return _SOPH_ALIAS.get(raw, "mid")
 
 

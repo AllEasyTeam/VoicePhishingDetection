@@ -22,18 +22,20 @@ def run_sensitivity(
     # 한 feature에 대한 민감도 분석 진행을 위한 함수.
     # K-Fold 학습/평가 -> 결과 비교표 반환.
 
+    # 스윕 대상 외 feature에 쓸 sophistication. None이면 mid.
+    base_soph = base_sophistication or "mid"
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=fold_seed)
 
     summary = []
     for value in candidate_values:
         # dataset 생성을 위한 build_dataset() 호출.
         # candidate_values가 [LOW, MID, HIGH]라면 각각의 sophistication 값에 대해 총 3번의 for문 반복.
-        # sophistication에 {param_name: value}만 넘기면, param_name 외 나머지 feature는
-        # _get_soph()의 기본값("중간")으로 고정됨. (base_sophistication 반영은 추후 별도 처리)
+        # sophistication에 {param_name: value} + __base__를 넘기면, 스윕 대상만 value,
+        # 나머지 feature는 base_soph(_get_soph의 __base__)로 고정됨.
         if sweep_target == "subgroup_ratio_key":
             # RELATION_TYPE_RATIO(A~E) 스윕: sophistication이 아니라 build_dataset()의
             # subgroup_ratio_key 인자 자체가 바뀜. sophistication은 지인/기관 비중과
-            # 무관한 축이라 "mid"로 고정.
+            # 무관한 축이라 "mid"로 고정. (base_soph와 무관)
             df = build_dataset(
                 n,
                 phishing_rate=phishing_rate,
@@ -51,7 +53,7 @@ def run_sensitivity(
                 subgroup_ratio_key=subgroup_ratio_key,
                 random_state=gen_seed,
                 config=fixed_config,
-                sophistication={param_name: value},
+                sophistication={"__base__": base_soph, param_name: value},
             )
 
         df = prepare_categorical(df)  # K-Fold로 나뉘기 전에 category dtype 한 번만 확정
