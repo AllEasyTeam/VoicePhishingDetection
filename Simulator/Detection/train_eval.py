@@ -93,10 +93,11 @@ def train_model(df, val=None, feature_cols=None):
     return model
 
 
-def evaluate(model, df, feature_cols=None):
+def evaluate(model, df, feature_cols=None, threshold_df=None):
     # 평가를 위한 함수.
     # accuracy / precision / recall / F1 / confusion_matrix / feature importance 반환.
     # feature_cols: train_model()과 동일한 컬럼 목록을 넘겨야 함(Track 시나리오 일치 필요).
+    # threshold_df: threshold 탐색용 데이터(보통 train). None이면 df에서 탐색(낙관 편향 가능).
     from sklearn.metrics import (
         accuracy_score,
         precision_score,
@@ -114,32 +115,47 @@ def evaluate(model, df, feature_cols=None):
     # 방어적 필터: feature_cols에 is_feature=False인 컬럼이 섞여 들어와도 한 번 더 걸러냄.
     valid_cols = set(get_feature_columns())
     feature_cols = [c for c in feature_cols if c in valid_cols]
-    X = df[feature_cols].copy()
-    y = df["is_phishing"]
 
     # train_model()과 동일하게, 실제 category dtype 변환은 prepare_categorical()이 분할 전에
     # 이미 끝내둠. 여기 있는 건 그걸 거치지 않고 바로 호출된 경우를 위한 방어용 fallback일 뿐
     # (보통은 이미 category라 no-op) -> fold 간 카테고리 코드북 불일치 문제는 못 막으니
     # 반드시 prepare_categorical()을 먼저 거쳐야 함.
-    categorical_cols = X.select_dtypes(include="object").columns
-    X[categorical_cols] = X[categorical_cols].astype("category")
-
+    #   -> fallback은 _prepare_xy()로 옮겨 eval/threshold_df 양쪽에 공통 적용.
     # 목적: model.predict()의 기본 threshold(0.5)는 극단적 클래스 불균형(피싱 1% vs 정상 99%)
     # 데이터에서는 최적이 아닐 수 있음(양성 확률이 0.5를 잘 못 넘어서 recall이 과도하게 낮게 나올 수 있음). 
     # 그래서 확률(proba)만 뽑아서, precision-recall curve 상에서 F1이 최대가 되는 threshold를 직접 탐색해 적용함.
+    #   -> 탐색은 threshold_df(없으면 df), 적용은 평가셋 df. thresholds가 비면 0.5로 fallback.
     # 주의(한계): 지금은 별도의 검증셋이 없어서(run_final()도 train/test 2분할만 씀),
-    # threshold를 "평가 대상 df 자기 자신"에서 찾는다 -> 이 df에 대해서는 다소 낙관적인
-    # (실제보다 좋게 보이는) F1이 나올 수 있음. 진짜 편향 없는 평가를 원하면 threshold
-    # 탐색은 별도 검증셋에서, 최종 성능 측정은 test set에서 하도록 분리해야 함.
-    proba = model.predict_proba(X)[:, 1]  # 피싱(1)일 확률
+    # threshold를 "평가 대상 df 자기 자신"에서 찾는다
+    #   -> threshold_df(보통 train)에서 탐색 후 평가셋에 고정 적용. main/sensitivity는 분리 호출.
+    #   threshold_df=None이면 예전처럼 df에서 탐색해 낙관 편향 가능.
+    # 진짜 편향 없는 평가를 원하면 threshold 탐색은 별도 검증셋에서, 최종 성능 측정은
+    # test set에서 하도록 분리해야 함.
+    #   -> train 탐색 / test·val 평가는 반영됨. 별도 val 3분할은 아직 없음.
+    def _prepare_xy(frame):
+        X_part = frame[feature_cols].copy()
+        # prepare_categorical() 이후라면 보통 no-op. 직접 호출된 경우만 object→category.
+        cat_cols = X_part.select_dtypes(include="object").columns
+        X_part[cat_cols] = X_part[cat_cols].astype("category")
+        return X_part, frame["is_phishing"]
 
-    precisions, recalls, thresholds = precision_recall_curve(y, proba)
+    X, y = _prepare_xy(df)
+
+    thr_frame = threshold_df if threshold_df is not None else df
+    X_thr, y_thr = _prepare_xy(thr_frame)
+    proba_thr = model.predict_proba(X_thr)[:, 1]
+    precisions, recalls, thresholds = precision_recall_curve(y_thr, proba_thr)
     # precision_recall_curve는 precision/recall을 thresholds보다 1개 더 많이 반환함
     # (마지막 지점은 threshold 없이 recall=0 지점) -> 그 마지막 지점은 탐색에서 제외.
-    f1_scores = 2 * (precisions[:-1] * recalls[:-1]) / (precisions[:-1] + recalls[:-1] + 1e-10)  # +1e-10: 0으로 나누기 방지
-    best_idx = f1_scores.argmax()
-    best_threshold = float(thresholds[best_idx])  # F1이 최대가 되는 threshold
+    if len(thresholds) == 0:
+        # 양성 표본이 없거나 curve가 비면 기본값 0.5 (argmax 크래시 방지)
+        # 민감도 K-Fold에서 fold마다 양성이 매우 적을 때 위험
+        best_threshold = 0.5
+    else:
+        f1_scores = 2 * (precisions[:-1] * recalls[:-1]) / (precisions[:-1] + recalls[:-1] + 1e-10)
+        best_threshold = float(thresholds[f1_scores.argmax()])
 
+    proba = model.predict_proba(X)[:, 1]  # 평가셋 피싱(1) 확률
     pred = (proba >= best_threshold).astype(int)
 
     # PR-AUC 함수

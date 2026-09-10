@@ -64,7 +64,10 @@ def run_final():
         # TRACK_SCENARIOS 개수만큼 반복. (Track별로 다른 모델 생성 및 평가 진행)
         cols = get_feature_columns(track_filter=tracks)
         model = train_model(train_set, feature_cols=cols)
-        results[scenario_name] = evaluate(model, test_set, feature_cols=cols)  # test set으로 최종 평가
+        # threshold는 train에서 고르고, 점수는 test에 고정 적용 (낙관 편향 방지)
+        results[scenario_name] = evaluate(
+            model, test_set, feature_cols=cols, threshold_df=train_set
+        )
     return results
 
 

@@ -71,8 +71,9 @@ def run_sensitivity(
             val_fold = df.iloc[val_idx] # validation fold에 해당하는 data
 
             # val_fold는 학습에 안 쓰고, 오직 평가에만 사용 -> 표준 K-Fold 방식.
+            # threshold는 train_fold에서 고르고 val_fold에 고정 적용.
             model = train_model(train_fold)
-            fold_results.append(evaluate(model, val_fold))
+            fold_results.append(evaluate(model, val_fold, threshold_df=train_fold))
 
         summary.append({
             "param_name": param_name,
