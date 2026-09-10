@@ -78,8 +78,11 @@ def train_model(df, val=None, feature_cols=None):
         # val이 넘어온 경우(현재 호출 경로에서는 안 씀): 검증셋으로 조기종료 ->
         # n_estimators=300까지 다 안 돌고 검증 성능이 20라운드 연속 개선 안 되면 멈춤
         # (과적합 방지, 학습 시간 단축).
+        # train의 categorical_cols만 쓰지 않고 X_val 자체 object 컬럼을 변환 
+        # (val에만 남은 object가 빠지지 않도록)
         X_val = val[feature_cols].copy()
-        X_val[categorical_cols] = X_val[categorical_cols].astype("category")
+        val_cat_cols = X_val.select_dtypes(include="object").columns
+        X_val[val_cat_cols] = X_val[val_cat_cols].astype("category")
         y_val = val["is_phishing"]
 
         model.set_params(early_stopping_rounds=20)
