@@ -27,14 +27,17 @@ TRACK_SCENARIOS = {
 # config.py의 SOPH_* 상수와 일치해야 함(= normal_generator.py/phishing_generator.py의
 # _get_soph() 조회 key). 하드코딩 문자열 대신 상수를 써서, 오타 시 여기서 바로 NameError로 드러나게 함.
 SENSITIVITY_PARAMS = [
+    # 하나
     config.SOPH_NUMBER_TYPE_BAND,
     config.SOPH_FIRST_CONTACT,
     config.SOPH_REPEAT_GAP,          # 정상 전용 (재연락 간격 배율/theta 크기)
     config.SOPH_REPEAT_CONTACT,      # 정상+피싱 공용 (사건 내 반복 접촉 존재확률)
+    # 지민
     config.SOPH_NUM_IN_MSG,
     config.SOPH_INNER_NUM_DIFFERS,
     config.SOPH_MSG_OFFICIAL_MATCH,
     config.SOPH_SMS_TO_CALL_GAP,     # 정상 전용
+    # 다은
     config.SOPH_URL_RATE,            # 정상 전용
     config.SOPH_APP_INSTALL,
     config.SOPH_SEQUENTIAL_CALLERS,

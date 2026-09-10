@@ -185,7 +185,7 @@ def evaluate(model, df, feature_cols=None):
         # feature명 → 중요도. XGBoost 기본(gain 기반) importance
         "feature_importance": dict(zip(feature_cols, model.feature_importances_)),
         # PR-AUC: precision-recall auc로 베이스라인 대비 압도적으로 높다는 것을 보임()
-        "PR-ARC" : pr_auc(y, proba),
+        "PR-AUC": pr_auc(y, proba),
         # Top-K : 상위층에서 흔들림 없이 잘 잡아주는지.
         "Lift@Top5%" : lift_5p,
         "Lift@Top10%" : lift_10p,
