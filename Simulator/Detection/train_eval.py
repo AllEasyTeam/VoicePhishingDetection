@@ -29,6 +29,36 @@ def split_data(df):
 
     return train, test
 
+def pr_auc(y, proba):
+    # Precision-Recall AUC.
+    from sklearn.metrics import precision_recall_curve, auc
+
+    p, r, _ = precision_recall_curve(y, proba)
+    return float(auc(r, p))
+
+
+def lift_at_top_k(y, proba, k=0.05):
+    """
+    상위 k% 표본 내 피싱 농축 배수(Lift) 계산
+    - y: 실제 피싱 여부 라벨 (0 또는 1)
+    - proba: 모델이 예측한 피싱 확률
+    - k: 상위 표본 비율 (0.05=상위 5%, 0.1=상위 10%, 0.2=상위 20%)
+    """
+    import numpy as np
+
+    y_arr = np.array(y)
+    cutoff = max(int(np.ceil(len(y_arr) * k)), 1)
+
+    # 예측 확률 기준 내림차순 정렬 후 상위 k% 인덱스 추출
+    top_indices = np.argsort(proba)[::-1][:cutoff]
+
+    # 상위 k% 내 피싱 적중률 / 전체 자연 피싱 발생률
+    top_rate = np.mean(y_arr[top_indices])
+    base_rate = np.mean(y_arr)
+
+    lift = top_rate / base_rate if base_rate > 0 else 0.0
+    return round(float(lift), 2)
+
 
 def train_model(df, val=None, feature_cols=None):
     # 학습을 위한 함수. (model : xgboost)
@@ -108,11 +138,9 @@ def evaluate(model, df, feature_cols=None, threshold_df=None):
         f1_score,
         classification_report,
         confusion_matrix,
-        precision_recall_curve, 
-        auc
+        precision_recall_curve,
     )
     from Simulator.schema_utils import get_feature_columns
-    import numpy as np
 
     feature_cols = feature_cols or get_feature_columns()
     # 방어적 필터: feature_cols에 is_feature=False인 컬럼이 섞여 들어와도 한 번 더 걸러냄.
@@ -161,32 +189,6 @@ def evaluate(model, df, feature_cols=None, threshold_df=None):
     proba = model.predict_proba(X)[:, 1]  # 평가셋 피싱(1) 확률
     pred = (proba >= best_threshold).astype(int)
 
-    # PR-AUC 함수
-    def pr_auc(y, proba):
-            p, r, _ = precision_recall_curve(y, proba)
-            return float(auc(r, p))
-
-    # lift at Top-K 함수 
-    def lift_at_top_k(y, proba, k=0.05):
-        """
-        상위 k% 표본 내 피싱 농축 배수(Lift) 계산
-        - y: 실제 피싱 여부 라벨 (0 또는 1)
-        - proba: 모델이 예측한 피싱 확률
-        - k: 상위 표본 비율 (0.05=상위 5%, 0.1=상위 10%, 0.2=상위 20%)
-        """
-        y_arr = np.array(y)
-        cutoff = max(int(np.ceil(len(y_arr) * k)), 1)
-        
-        # 예측 확률 기준 내림차순 정렬 후 상위 k% 인덱스 추출
-        top_indices = np.argsort(proba)[::-1][:cutoff]
-        
-        # 상위 k% 내 피싱 적중률 / 전체 자연 피싱 발생률
-        top_rate = np.mean(y_arr[top_indices])
-        base_rate = np.mean(y_arr)
-        
-        lift = top_rate / base_rate if base_rate > 0 else 0.0
-        return round(float(lift), 2)
-   
     lift_5p = lift_at_top_k(y, proba, k=0.05)
     lift_10p = lift_at_top_k(y, proba, k=0.1)
     lift_20p = lift_at_top_k(y, proba, k=0.2)
