@@ -10,7 +10,7 @@ from Simulator.schema_utils import get_feature_columns
 
 
 # 최종 모드 실행 파라미터. "이번 최종 실행을 어떻게 돌릴지"에 대한 파이프라인 설정값이라 main.py에 지역 상수로 둠.
-N = 10000                  # 생성할 사건 수
+N = 100000                  # 생성할 사건 수
 SUBGROUP_RATIO_KEY = "B"   # 정상 이벤트 하위집단(지인/기관) 비중 키 (민감도 분석 진행 후 확정)
 GEN_SEED = 42              # build_dataset()용 random_state
 
@@ -45,7 +45,7 @@ SENSITIVITY_PARAMS = [
 ]
 
 # mode="each_sen"일 때 확인할 feature 1개. 바꾸고 싶으면 이 줄만 수정(config.SOPH_* 중 하나).
-EACH_SENSITIVITY_PARAM = config.SOPH_NUMBER_TYPE_BAND
+EACH_SENSITIVITY_PARAM = config.SOPH_REPEAT_CONTACT
 
 
 def run_final():
@@ -89,9 +89,16 @@ def run_sensitivity_mode():
             subgroup_ratio_key=SUBGROUP_RATIO_KEY,
         )
 
-    # RELATION_TYPE_RATIO(정상 이벤트 하위집단 지인:기관 비중, A~E) 스윕.
-    # sophistication 기반이 아니라 build_dataset()의 subgroup_ratio_key 자체를 바꾸는 축이라 별도 호출.
-    result["subgroup_ratio_key"] = run_sensitivity(
+    result["subgroup_ratio_key"] = run_sensitivity_ratio_mode()
+
+    return result
+
+def run_sensitivity_ratio_mode():
+    """지인:기관 하위집단 비중(RELATION_TYPE_RATIO, A~E)만 따로 민감도분석 진행.
+    sophistication 기반이 아니라 build_dataset()의 subgroup_ratio_key 자체를 바꾸는 축이라
+    SENSITIVITY_PARAMS(SOPH_* 스윕)와는 별개로 분리."""
+    # run_sensitivity() 안에서 sensitivity_results/subgroup_ratio_key.json으로 자동 저장됨.
+    summary = run_sensitivity(
         param_name="subgroup_ratio_key",
         candidate_values=list(config.RELATION_TYPE_RATIO.keys()),  # ["A", "B", "C", "D", "E"]
         fixed_config=config,
@@ -99,8 +106,7 @@ def run_sensitivity_mode():
         phishing_rate=config.CLASS_IMBALANCE,
         n=N,
     )
-
-    return result
+    return summary
 
 def run_sensitivity_each_feature_mode(param_name):
     """각 feature에 대해 진행 가능하도록 하는 함수(run_sensitivity_mode()는 전체 feature에 대해서.)"""
@@ -132,6 +138,8 @@ def main(mode: str, param_name=None):
                 f"알 수 없는 param_name: {param_name!r}. SENSITIVITY_PARAMS 중 하나여야 함: {SENSITIVITY_PARAMS}"
             )
         result = run_sensitivity_each_feature_mode(param_name)
+    elif mode == "ratio":
+        result = run_sensitivity_ratio_mode()
     else:
         raise ValueError(f"알 수 없는 mode: {mode}")
 
@@ -147,13 +155,14 @@ def main(mode: str, param_name=None):
 #   python -X utf8 -m Simulator.main -m each_sen  -> feature 1개만 스윕(위 EACH_SENSITIVITY_PARAM 값 사용).
 #                                                     확인할 feature를 바꾸려면 CLI가 아니라 코드 상단의
 #                                                     EACH_SENSITIVITY_PARAM 줄을 직접 수정할 것.
+#   python -X utf8 -m Simulator.main -m ratio     -> 지인:기관 하위집단 비중(RELATION_TYPE_RATIO, A~E)만 스윕
 #   -m은 --mode의 짧은 별칭.
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Voice Phishing Detection 시뮬레이터 파이프라인 실행")
     parser.add_argument(
-        "-m", "--mode", default="final", choices=["final", "sen", "each_sen"],
+        "-m", "--mode", default="final", choices=["final", "sen", "each_sen", "ratio"],
         help="실행 모드 (기본값: final)",
     )
     args = parser.parse_args()
