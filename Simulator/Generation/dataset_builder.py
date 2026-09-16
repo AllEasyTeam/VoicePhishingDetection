@@ -104,6 +104,10 @@ def build_dataset(
 
     # 14: return dataset (DataFrame 변환 및 셔플링-dataset 생성에서 순서 의존성 차단 목적)
     df = pd.DataFrame(dataset)
+    #최종 표 순서 스키마 기준으로 고정
+    schema_cols = [c for c in get_schema_column_names() if c in df.columns]
+    extra_cols = [c for c in df.columns if c not in schema_cols]
+    df = df[schema_cols + extra_cols]
     return df.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
 
 
@@ -134,9 +138,8 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
         "sms_to_call", "sms_to_call_gap", "is_url_in_msg", "has_appinstall_link",
         "is_sequential_callers", "is_phishing", "incident_type",
     ]
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.width", 1000)
-    print(df[preview_cols].head(preview_sample_size).to_string())
+    with pd.option_context("display.max_columns", None, "display.width", 1000):
+        print(df[preview_cols].head(preview_sample_size).to_string())
 
     # 2. 스키마 결측치 및 비즈니스 규칙 정합성 검증
     print("\n" + "=" * 80)
@@ -190,18 +193,9 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
 
 # 소량 생성 검증용 테스트 코드. 추후 삭제
 if __name__ == "__main__":
-    import sys
-    from pathlib import Path
-
-    # 단독 실행 시 상위 패키지 경로 탐색 보정
-    current_dir = Path(__file__).resolve().parent
-    project_root = current_dir.parent.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-        
     from Simulator.Generation import config
 
-    # 1. 20건 생성 (검증을 위해 피싱 비율을 임의로 상향 설정)
+    # 1. sample_size, phishing_rate 등 값 수정으로 실행
     sample_size = 20
     df_sample = build_dataset(
         n=sample_size,

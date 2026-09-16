@@ -45,7 +45,7 @@ SUBGROUP_INSTITUTION_CORPORATE = "subgroup_institution_corporate" # 기관_기�
 
 # ============================================================
 # sophistication 조회용 feature key 상수 선언
-# normal_generator.py / phishing_generator.py의 _get_soph(sophistication, key)
+# generator_utils.get_soph(sophistication, key)
 # 호출부와 main.py의 SENSITIVITY_PARAMS가 공유해서 사용.
 # (한글 문자열을 직접 여러 곳에 반복 입력하면 오타가 나도 에러 없이
 #  "mid"로 조용히 넘어가므로, 상수로 선언해 오타 시 NameError로 즉시 드러나게 함)
@@ -186,8 +186,9 @@ WHITELIST_NUMS=[
     # 기본 형식: {"번호": "", "기관명": ""},
 ]
 
-#빠른 조회용
-WHITELIST_SET = {normalize(item["번호"])  for item in WHITELIST_NUMS}
+# 빠른 조회용. LIST는 random.choice용으로 한 번만 만들어 두고 재사용.
+WHITELIST_SET = {normalize(item["번호"]) for item in WHITELIST_NUMS}
+WHITELIST_LIST = list(WHITELIST_SET)
 
 
 # ============================================================
