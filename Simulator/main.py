@@ -1,12 +1,17 @@
 # Simulator 코드 작성을 위한 main.py
 # 역할: 전체 파이프라인의 진입점. mode에 따라 Generation과 Detection을 순서대로 호출.
 
+from pathlib import Path
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical
 from Simulator.Detection.sensitivity_analysis import run_sensitivity, run_stress_sensitivity
 from Simulator.schema import Track
 from Simulator.schema_utils import get_feature_columns
+
+# 최종 dataset 저장 폴더: 실행 위치(cwd)와 무관하게 항상 프로젝트 루트 기준으로 고정.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DATASET_DIR = _PROJECT_ROOT / "DataSet"
 
 
 # 최종 모드 실행 파라미터. "이번 최종 실행을 어떻게 돌릴지"에 대한 파이프라인 설정값이라 main.py에 지역 상수로 둠.
@@ -89,9 +94,17 @@ STRESS_SCENARIO_KEY = config.STRESS_URL_RATE_KEY
 STRESS_K = 5
 
 
+def save_final_dataset(df, out_dir: Path = _DATASET_DIR) -> None:
+    """생성 직후(카테고리 변환/분할 전)의 원본 dataset을 DataSet/ 폴더에 CSV+Parquet 둘 다로 저장.
+    같은 이름으로 덮어씀(재실행 시 항상 최신 dataset만 유지, 버전별 파일 누적 안 함)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_dir / "final_dataset.csv", index=False, encoding="utf-8-sig")  # utf-8-sig: Excel에서 한글 깨짐 방지
+    df.to_parquet(out_dir / "final_dataset.parquet", index=False)  # dtype(카테고리 등) 그대로 보존
+
+
 def run_final():
-    """최종 모드: 확정한 config 값으로 데이터셋 1개 생성 -> split_data() 2분할(train/test)
-    -> Track 시나리오(B/C)별로 feature만 다르게 골라 train_model()/evaluate() 반복."""
+    """최종 모드: 확정한 config 값으로 데이터셋 1개 생성 -> DataSet/ 폴더에 저장
+    -> split_data() 2분할(train/test) -> Track 시나리오(B/C)별로 feature만 다르게 골라 train_model()/evaluate() 반복."""
     df = build_dataset(
         n=N,
         phishing_rate=config.CLASS_IMBALANCE,
@@ -100,6 +113,8 @@ def run_final():
         config=config,
         sophistication=FINAL_SOPHISTICATION,
     )
+    save_final_dataset(df)  # Detection 쪽 가공(category 변환/분할) 전, 생성 직후의 원본을 저장
+
     df = prepare_categorical(df)  # train/test로 나뉘기 전에 category dtype 한 번만 확정
 
     train_set, test_set = split_data(df) # train/test 2분할
