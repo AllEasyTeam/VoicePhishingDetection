@@ -22,6 +22,14 @@ def get_schema_column_names() -> List[str]:
     return [c.name for c in SCHEMA]
 
 
+def get_non_feature_columns() -> List[str]:
+    """학습에 쓰면 안 되는 컬럼 이름 목록(is_feature=False인 column만, ex. phone_number/call_time).
+    train_model()/evaluate()의 방어적 필터가 "SCHEMA에 등록된 feature만 허용"이 아니라
+    "is_feature=False만 차단"하도록 바꿀 때 씀 -> SCHEMA에 아직 없는 파생 feature 후보도
+    feature_cols로 넘기면 정상적으로 학습에 쓸 수 있음."""
+    return [c.name for c in SCHEMA if not c.is_feature]
+
+
 def get_nullable_columns() -> List[str]:
     """결측 가능한 컬럼 이름 목록만 뽑아주는 함수(nullable=True인 column만)"""
     return [c.name for c in SCHEMA if c.nullable]

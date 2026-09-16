@@ -13,7 +13,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 
-from Simulator.schema_utils import get_feature_columns
+from Simulator.schema_utils import get_feature_columns, get_non_feature_columns
 
 
 def prepare_categorical(df):
@@ -31,12 +31,14 @@ def prepare_categorical(df):
 
 
 def _resolve_feature_cols(feature_cols):
-    # feature_cols 존재하는 경우: Track 시나리오가 넘어온 경우(Track A,B,C) -> 해당 feature만 사용
+    # feature_cols 존재하는 경우: Track 시나리오(Track A,B,C)나 ablation용 커스텀 컬럼 목록이 넘어온 경우 -> 그대로 사용
     # feature_cols 존재하지 않는 경우: 민감도 분석 진행 -> 전체 feature 모두 사용
-    # 방어적 필터: is_feature=False인 컬럼(phone_number, call_time 등)이 실수로 섞여 들어와도 걸러냄.
-    valid_cols = set(get_feature_columns())
+    # 방어적 필터: is_feature=False인 컬럼(phone_number, call_time 등)만 걸러냄("SCHEMA 등록
+    # 여부"가 아니라 "is_feature=False 여부"만 봄) -> SCHEMA에 아직 없는 파생 feature 후보
+    # (ablation 검증용)도 df에 실제 컬럼으로 존재하기만 하면 정상적으로 학습에 쓸 수 있음.
+    banned_cols = set(get_non_feature_columns())
     cols = feature_cols or get_feature_columns()
-    return [c for c in cols if c in valid_cols]
+    return [c for c in cols if c not in banned_cols]
 
 
 def split_data(df):

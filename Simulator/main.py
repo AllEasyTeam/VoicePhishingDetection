@@ -6,6 +6,7 @@ from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical
 from Simulator.Detection.sensitivity_analysis import run_sensitivity, run_stress_sensitivity
+from Simulator.Detection.feature_ablation import run_feature_selection_pipeline
 from Simulator.schema import Track
 from Simulator.schema_utils import get_feature_columns
 
@@ -92,6 +93,11 @@ STRESS_SCENARIO_KEY = config.STRESS_URL_RATE_KEY
 
 # mode="stress"일 때 쓸 K. 기본 5(표준).
 STRESS_K = 5
+
+# mode="ablation"일 때 쓸 다중공선성/데이터 누수 판정 임계값. feature_ablation.py의
+# 기본값(0.8/0.95)을 그대로 쓰고 싶으면 None으로 둠 -> 바꾸고 싶을 때만 이 줄 수정.
+ABLATION_MULTICOLLINEARITY_THRESHOLD = None
+ABLATION_LEAKAGE_THRESHOLD = None
 
 
 def save_final_dataset(df, out_dir: Path = _DATASET_DIR) -> None:
@@ -212,11 +218,31 @@ def run_stress_mode(scenario_key=None, k=None):
     return summary
 
 
+def run_ablation_mode():
+    """파생 feature 선정 파이프라인 모드: baseline(원본만) vs full(원본+13개) 비교 ->
+    train set 기준 다중공선성 점검(+데이터 누수 플래그) -> Embedded method(SHAP 참고) +
+    Permutation Importance 기반 가지치기 -> 최종 feature set으로 재학습 -> test set 평가.
+    결과는 feature_selection_results/feature_selection_pipeline.json에 저장됨."""
+    kwargs = dict(
+        fixed_config=config,
+        n=N,
+        phishing_rate=config.CLASS_IMBALANCE,
+        subgroup_ratio_key=SUBGROUP_RATIO_KEY,
+    )
+    if ABLATION_MULTICOLLINEARITY_THRESHOLD is not None:
+        kwargs["multicollinearity_threshold"] = ABLATION_MULTICOLLINEARITY_THRESHOLD
+    if ABLATION_LEAKAGE_THRESHOLD is not None:
+        kwargs["leakage_threshold"] = ABLATION_LEAKAGE_THRESHOLD
+    return run_feature_selection_pipeline(**kwargs)
+
+
 def main(mode: str, param_name=None, k=None, scenario_key=None):
     # param_name/k: mode="each_sen"일 때만 사용. scenario_key/k: mode="stress"일 때만 사용.
-    # 둘 다 직접 Python으로 호출할 때만 넘기는 선택 인자이고, CLI(-m each_sen / -m stress)로는 안 받음
-    # -> 코드 상단의 EACH_SENSITIVITY_PARAM/EACH_SENSITIVITY_K, STRESS_SCENARIO_KEY/STRESS_K를
-    # 바꿔서 확인할 feature(또는 시나리오)/K를 정함(안 넘기면 그 상수값을 그대로 씀).
+    # 둘 다 직접 Python으로 호출할 때만 넘기는 선택 인자이고, CLI(-m each_sen / -m stress)로는
+    # 안 받음 -> 코드 상단의 EACH_SENSITIVITY_PARAM/EACH_SENSITIVITY_K, STRESS_SCENARIO_KEY/
+    # STRESS_K를 바꿔서 확인할 feature(또는 시나리오)/K를 정함(안 넘기면 그 상수값을 그대로 씀).
+    # mode="ablation"은 K-Fold가 아니라 train/test 고정 분할 기반이라 k를 받지 않음 ->
+    # 임계값을 바꾸려면 ABLATION_MULTICOLLINEARITY_THRESHOLD/ABLATION_LEAKAGE_THRESHOLD를 수정.
     if mode == "final":
         result = run_final()
     elif mode == "sen":
@@ -236,6 +262,8 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
         result = run_sensitivity_ratio_mode()
     elif mode == "stress":
         result = run_stress_mode(scenario_key=scenario_key, k=k)
+    elif mode == "ablation":
+        result = run_ablation_mode()
     else:
         raise ValueError(f"알 수 없는 mode: {mode}")
 
@@ -256,13 +284,22 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
 #                                                     STRESS_SCENARIO_KEY 시나리오 1개의 확률/θ 절대값만 스윕
 #                                                     (위 STRESS_SCENARIO_KEY/STRESS_K 값 사용). 시나리오나 K를
 #                                                     바꾸려면 CLI가 아니라 코드 상단의 두 줄을 직접 수정할 것.
+#   python -X utf8 -m Simulator.main -m ablation  -> 파생 feature 선정 파이프라인: baseline(원본만) vs
+#                                                     full(원본+파생 13개) 비교 -> train set 기준
+#                                                     다중공선성 점검(+데이터 누수 플래그) -> SHAP 참고 +
+#                                                     Permutation Importance 기반 가지치기 -> 최종 재학습/평가.
+#                                                     feature_selection_results/feature_selection_pipeline.json에 저장.
+#                                                     임계값을 바꾸려면 코드 상단의
+#                                                     ABLATION_MULTICOLLINEARITY_THRESHOLD/
+#                                                     ABLATION_LEAKAGE_THRESHOLD를 직접 수정할 것.
 #   -m은 --mode의 짧은 별칭.
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Voice Phishing Detection 시뮬레이터 파이프라인 실행")
     parser.add_argument(
-        "-m", "--mode", default="final", choices=["final", "sen", "each_sen", "ratio", "stress"],
+        "-m", "--mode", default="final",
+        choices=["final", "sen", "each_sen", "ratio", "stress", "ablation"],
         help="실행 모드 (기본값: final)",
     )
     args = parser.parse_args()
