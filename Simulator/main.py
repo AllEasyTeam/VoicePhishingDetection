@@ -4,17 +4,20 @@
 import json
 from pathlib import Path
 import pandas as pd
+from sklearn.model_selection import train_test_split
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical
 from Simulator.Detection.sensitivity_analysis import run_sensitivity, run_stress_sensitivity
 from Simulator.Detection.feature_ablation import run_feature_selection_pipeline
+from Simulator.Detection.optuna_apply import run_optuna_tuning_and_compare
 from Simulator.schema import Track
 from Simulator.schema_utils import get_feature_columns
 
 # 최종 dataset 저장 폴더: 실행 위치(cwd)와 무관하게 항상 프로젝트 루트 기준으로 고정.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATASET_DIR = _PROJECT_ROOT / "DataSet"
+_TUNE_RESULTS_DIR = _PROJECT_ROOT / "optuna_results"
 
 
 # 최종 모드 실행 파라미터. "이번 최종 실행을 어떻게 돌릴지"에 대한 파이프라인 설정값이라 main.py에 지역 상수로 둠.
@@ -109,6 +112,11 @@ STRESS_K = 5
 ABLATION_MULTICOLLINEARITY_THRESHOLD = None
 ABLATION_LEAKAGE_THRESHOLD = None
 
+# mode="tune"일 때 Optuna trial 횟수 / validation 비율(train_set 중 permutation importance와
+# 동일한 방식으로 train_sub/val_sub를 나눠서, val_sub로만 탐색 평가 -> test_set은 안 건드림).
+TUNE_N_TRIALS = 50
+TUNE_VAL_SIZE = 0.2
+
 
 # ------------------------------------------------------------
 # 최종 dataset 캐싱 메커니즘 (generate_final_dataset / get_or_generate_final_dataset)
@@ -194,19 +202,24 @@ def get_or_generate_final_dataset():
 
 def run_final():
     """최종 모드: get_or_generate_final_dataset()으로 dataset 확보(저장된 게 있고 파라미터가
-    그대로면 재사용, 아니면 새로 생성) -> split_data() 2분할(train/test) -> Track 시나리오(B/C)별로
-    feature만 다르게 골라 train_model()/evaluate() 반복."""
+    그대로면 재사용, 아니면 새로 생성) -> split_data() 2분할(train/test) -> optuna_results/
+    best_params.json이 있으면 그 모델 종류(XGBoost/LightGBM 중 승자)+하이퍼파라미터를 사용
+    (없으면 train_model() 기본값=XGBoost) -> Track 시나리오(B/C)별로 feature만 다르게 골라
+    train_model()/evaluate() 반복."""
     df = get_or_generate_final_dataset()
 
     df = prepare_categorical(df)  # train/test로 나뉘기 전에 category dtype 한 번만 확정
 
     train_set, test_set = split_data(df) # train/test 2분할
 
+    model_type, tuned_hyperparams = load_tuned_hyperparams()  # 없으면 (None, None) -> 기본값 사용
+    model_type = model_type or "XGBoost"
+
     results = {}  # {시나리오명("B"/"C"): evaluate() 결과}
     for scenario_name, tracks in TRACK_SCENARIOS.items():
         # TRACK_SCENARIOS 개수만큼 반복. (Track별로 다른 모델 생성 및 평가 진행)
         cols = get_feature_columns(track_filter=tracks)
-        model = train_model(train_set, feature_cols=cols)
+        model = train_model(train_set, feature_cols=cols, hyperparams=tuned_hyperparams, model_type=model_type)
         # threshold는 train에서 고르고, 점수는 test에 고정 적용 (낙관 편향 방지)
         results[scenario_name] = evaluate(
             model, test_set, feature_cols=cols, threshold_df=train_set
@@ -312,6 +325,49 @@ def run_ablation_mode():
     return run_feature_selection_pipeline(**kwargs)
 
 
+def load_tuned_hyperparams(out_dir: Path = _TUNE_RESULTS_DIR):
+    """optuna_results/best_params.json이 있으면 (model_type, tuned_hyperparams) 튜플을 반환,
+    없으면 (None, None)(= train_model()이 기본 XGBoost 하이퍼파라미터를 그대로 씀).
+    "winner" 필드(XGBoost/LightGBM 비교 결과)를 기준으로 이긴 쪽 하이퍼파라미터만 꺼내옴."""
+    path = out_dir / "best_params.json"
+    if not path.exists():
+        return None, None
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    winner = payload.get("winner")
+    if winner is None:
+        return None, None
+    return winner, payload[winner]["tuned_hyperparams"]
+
+
+def run_tuning_mode():
+    """Optuna 하이퍼파라미터 탐색 모드: get_or_generate_final_dataset()으로 dataset 확보
+    -> train/test 분할(test는 안 건드림) -> train_set 안에서 다시 train_sub/val_sub 분할
+    (feature_ablation.py와 동일한 방식) -> val_sub 기준으로 XGBoost/LightGBM 둘 다 Optuna 탐색
+    후 더 나은 쪽(winner)을 선택.
+    결과는 optuna_results/best_params.json에 저장되고, run_final()이 다음 실행부터
+    이 파일을 자동으로 읽어서(winner 모델 + 그 하이퍼파라미터) 반영함."""
+    df = get_or_generate_final_dataset()
+    df = prepare_categorical(df)
+    train_set, test_set = split_data(df)  # test_set은 여기서 전혀 안 씀
+
+    train_sub, val_sub = train_test_split(
+        train_set, test_size=TUNE_VAL_SIZE, random_state=42, stratify=train_set["is_phishing"]
+    )
+
+    feature_cols = get_feature_columns()
+    X_train, y_train = train_sub[feature_cols], train_sub["is_phishing"]
+    X_val, y_val = val_sub[feature_cols], val_sub["is_phishing"]
+
+    result = run_optuna_tuning_and_compare(X_train, y_train, X_val, y_val, n_trials=TUNE_N_TRIALS)
+
+    _TUNE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_TUNE_RESULTS_DIR / "best_params.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    return result
+
+
 def main(mode: str, param_name=None, k=None, scenario_key=None):
     # param_name/k: mode="each_sen"일 때만 사용. scenario_key/k: mode="stress"일 때만 사용.
     # 둘 다 직접 Python으로 호출할 때만 넘기는 선택 인자이고, CLI(-m each_sen / -m stress)로는
@@ -342,6 +398,8 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
         result = run_stress_mode(scenario_key=scenario_key, k=k)
     elif mode == "ablation":
         result = run_ablation_mode()
+    elif mode == "tune":
+        result = run_tuning_mode()
     else:
         raise ValueError(f"알 수 없는 mode: {mode}")
 
@@ -377,6 +435,13 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
 #                                                     임계값을 바꾸려면 코드 상단의
 #                                                     ABLATION_MULTICOLLINEARITY_THRESHOLD/
 #                                                     ABLATION_LEAKAGE_THRESHOLD를 직접 수정할 것.
+#   python -X utf8 -m Simulator.main -m tune      -> Optuna로 XGBoost/LightGBM 둘 다 하이퍼파라미터
+#                                                     탐색 후 val PR-AUC 더 높은 쪽(winner)을 선택.
+#                                                     train_set 안에서 train_sub/val_sub로 나눠
+#                                                     val_sub 기준으로 탐색(test_set은 안 건드림).
+#                                                     결과는 optuna_results/best_params.json에 저장되고,
+#                                                     이후 -m final을 돌리면 winner 모델+하이퍼파라미터가 자동 반영됨.
+#                                                     trial 수를 바꾸려면 코드 상단의 TUNE_N_TRIALS 수정.
 #   -m은 --mode의 짧은 별칭.
 if __name__ == "__main__":
     import argparse
@@ -384,7 +449,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Voice Phishing Detection 시뮬레이터 파이프라인 실행")
     parser.add_argument(
         "-m", "--mode", default="final",
-        choices=["generate", "final", "sen", "each_sen", "ratio", "stress", "ablation"],
+        choices=["generate", "final", "sen", "each_sen", "ratio", "stress", "ablation", "tune"],
         help="실행 모드 (기본값: final)",
     )
     args = parser.parse_args()
