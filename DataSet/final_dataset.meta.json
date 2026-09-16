@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "n": 5000,
+  "version": 1,
+  "n": 100000,
   "gen_seed": 42,
   "subgroup_ratio_key": "D",
   "sophistication": {
