@@ -135,6 +135,7 @@ def run_sensitivity_mode():
 
     return result
 
+
 def run_sensitivity_ratio_mode():
     """지인:기관 하위집단 비중(RELATION_TYPE_RATIO, A~E)만 따로 민감도분석 진행.
     sophistication 기반이 아니라 build_dataset()의 subgroup_ratio_key 자체를 바꾸는 축이라
@@ -150,17 +151,18 @@ def run_sensitivity_ratio_mode():
     )
     return summary
 
+
 def run_sensitivity_each_feature_mode(param_name, k=5):
     """각 feature에 대해 진행 가능하도록 하는 함수(run_sensitivity_mode()는 전체 feature에 대해서.)
     k: 기본 5(표준). 재검증 등으로 늘리고 싶으면(예: 10) 여기로 넘기면 됨 ->
        sensitivity_results/<param_name>_k<k>.json으로 기존 K=5 결과와 별도 저장됨."""
     # run_sensitivity() 안에서 sensitivity_results/<param_name>.json(또는 _k<k>.json)으로 자동 저장됨.
     summary = run_sensitivity(
-        param_name = param_name,
-        candidate_values = ["low", "mid", "high"],
+        param_name=param_name,
+        candidate_values=["low", "mid", "high"],
         fixed_config=config,
-        phishing_rate = config.CLASS_IMBALANCE,
-        n = N,
+        phishing_rate=config.CLASS_IMBALANCE,
+        n=N,
         subgroup_ratio_key=SUBGROUP_RATIO_KEY,
         k=k,
     )
@@ -171,8 +173,10 @@ def run_sensitivity_each_feature_mode(param_name, k=5):
 def run_stress_mode(scenario_key=None, k=None):
     """가정-파괴(stress) 모드: scenario_key 1개에 대해 run_stress_sensitivity() 호출.
     sophistication은 "mid" 고정, config.py의 STRESS_*_LEVELS에 정의된 level별로 확률/θ 절대값만 스윕."""
-    scenario_key = scenario_key or STRESS_SCENARIO_KEY
-    k = k or STRESS_K
+    if scenario_key is None:
+        scenario_key = STRESS_SCENARIO_KEY
+    if k is None:
+        k = STRESS_K
     if scenario_key not in STRESS_SCENARIOS:
         raise ValueError(
             f"알 수 없는 stress scenario_key: {scenario_key!r}. STRESS_SCENARIOS 중 하나여야 함: {list(STRESS_SCENARIOS)}"
@@ -201,8 +205,10 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
     elif mode == "sen":
         result = run_sensitivity_mode()
     elif mode == "each_sen":
-        param_name = param_name or EACH_SENSITIVITY_PARAM
-        k = k or EACH_SENSITIVITY_K
+        if param_name is None:
+            param_name = EACH_SENSITIVITY_PARAM
+        if k is None:
+            k = EACH_SENSITIVITY_K
         # param_name이 SENSITIVITY_PARAMS(유효한 SOPH_* 값 목록)에 있는지 방어적으로 한 번 더 확인.
         if param_name not in SENSITIVITY_PARAMS:
             raise ValueError(

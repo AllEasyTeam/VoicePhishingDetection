@@ -73,9 +73,9 @@ def _generate_phishing_phone(
 
     soph = _get_soph(sophistication, config.SOPH_NUMBER_TYPE_BAND)
 
-    '''이 피싱 유형이 "문자로" 발신번호를 보낼 때 쓰는 확률분포(PHISHING_SMS_NUMBER_TYPE) 가져오기. 
+    '''이 피싱 유형이 "문자로" 발신번호를 보낼 때 쓰는 확률분포(PHISHING_SMS_NUMBER_TYPE) 가져오기.
     -> acquaintance: {"010": 0.99, "기타": 0.01} 처럼 flat
-    -> 그 외 유형: PHISHING_CALL_NUMBER_TYPE 차용해서 동일하게 사용. (카테고리 → {low/mid/high})'''    
+    -> 그 외 유형: PHISHING_CALL_NUMBER_TYPE 차용해서 동일하게 사용. (카테고리 → {low/mid/high})'''
     sms_band = config.PHISHING_SMS_NUMBER_TYPE.get(p_type)
 
     # 개시 채널이 문자이고, sms_band가 dict이면(= 해당 피싱 유형이 문자 발신번호 확률분포를 갖는 경우) sms_band에서 확률분포에 따라 발신번호 카테고리 뽑기.
@@ -111,7 +111,7 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
 
     # 2. 통화/문자 시간 및 기본 속성 (call_time/call_type은 규칙 3: 항상 관측 / hour_bucket은 ETC만 결측)
     # column 중 "call_time", "hour_bucket", "call_type" 값 확정
-    skew_prob = config.PHISHING_HOUR_BUCKET[p_type] 
+    skew_prob = config.PHISHING_HOUR_BUCKET[p_type]
     if skew_prob is None:
         # 보이스피싱 유형이 ETC인 경우(skew_prob이 None임)
         hour = random.randint(0, 23)  # 근거 없음 -> 24시간 균등하게 선택.
@@ -210,9 +210,9 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
     # 8. Track A 전용 feature (규칙 4: 통신사 데이터 부재로 NaN)
     # column 중 "is_carrier_altered", "using_duration", "unique_callees", "number_cluster" 값 확정.
     is_carrier_altered = np.nan
+    number_cluster = np.nan
     using_duration = np.nan
     unique_callees = np.nan
-    number_cluster = np.nan  
 
 
     return {
@@ -235,9 +235,9 @@ def generate_phishing_event(p_type: str, sophistication: Union[str, Dict[str, st
         "is_reliable_url": is_reliable_url,
         "has_appinstall_link": has_appinstall_link,
         "is_carrier_altered": is_carrier_altered,
+        "number_cluster": number_cluster,
         "using_duration": using_duration,
         "unique_callees": unique_callees,
-        "number_cluster": number_cluster,
         "is_global": is_global,
-        "is_sequential_callers": is_sequential_callers
+        "is_sequential_callers": is_sequential_callers,
     }

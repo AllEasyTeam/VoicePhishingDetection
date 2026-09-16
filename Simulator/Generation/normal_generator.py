@@ -173,9 +173,9 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
     seq_soph = _get_soph(sophistication, config.SOPH_SEQUENTIAL_CALLERS)
     is_sequential_callers = 1 if random.random() < config.NORMAL_IS_SEQUENTIAL_CALLERS[seq_soph] else 0
     is_carrier_altered = np.nan
+    number_cluster = np.nan  # 다수 사건 비교(통신사 실측자료) 필요 -> 시뮬레이터에서는 항상 NaN
     using_duration = np.nan
     unique_callees = np.nan
-    number_cluster = np.nan  # 다수 사건 비교(통신사 실측자료) 필요 -> 시뮬레이터에서는 항상 NaN
 
     return {
         "phone_number": phone_number,
@@ -197,9 +197,9 @@ def generate_normal_event(subgroup: str, config, sophistication: Union[str, Dict
         "is_reliable_url": is_reliable_url,
         "has_appinstall_link": has_appinstall_link,
         "is_carrier_altered": is_carrier_altered,
+        "number_cluster": number_cluster,
         "using_duration": using_duration,
         "unique_callees": unique_callees,
-        "number_cluster": number_cluster,
         "is_global": is_global,
-        "is_sequential_callers": is_sequential_callers
+        "is_sequential_callers": is_sequential_callers,
     }

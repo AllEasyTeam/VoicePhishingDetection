@@ -17,14 +17,18 @@ def get_feature_columns(track_filter: Optional[List[Track]] = None) -> List[str]
     return [c.name for c in cols]
 
 
-def get_nullable_columns() -> List:
-    """결측 가능한 컬럼들만 뽑아주는 함수(nullable=True인 column만)"""
-    return [c for c in SCHEMA if c.nullable]
+def get_schema_column_names() -> List[str]:
+    """스키마에 정의된 컬럼 이름 목록 (SCHEMA 선언 순서)."""
+    return [c.name for c in SCHEMA]
+
+
+def get_nullable_columns() -> List[str]:
+    """결측 가능한 컬럼 이름 목록만 뽑아주는 함수(nullable=True인 column만)"""
+    return [c.name for c in SCHEMA if c.nullable]
 
 
 def get_non_nullable_columns() -> List[str]:
     """항상 값이 있어야 하는 컬럼 이름 목록만 뽑아주는 함수(nullable=False인 column만)"""
-    # get_nullable_columns()와 반대로 동작하는 함수.
     return [c.name for c in SCHEMA if not c.nullable]
 
 

@@ -22,12 +22,12 @@ def split_data(df):
     # train과 test set으로 분할.
     train, test = train_test_split(
         df,
-        test_size = 0.3, # 30%를 test set으로 분할.
-        random_state = 42, # 재현성 확보를 위해 random_state 고정.(값이 중요한 게 아님. 동일 값을 사용하는 게 중요.)
-        stratify = df["is_phishing"]
+        test_size=0.3,  # 30%를 test set으로 분할.
+        random_state=42,  # 재현성 확보를 위해 random_state 고정.(값이 중요한 게 아님. 동일 값을 사용하는 게 중요.)
+        stratify=df["is_phishing"],
     )
-
     return train, test
+
 
 def pr_auc(y, proba):
     # Precision-Recall AUC.
@@ -154,7 +154,7 @@ def evaluate(model, df, feature_cols=None, threshold_df=None):
     # 반드시 prepare_categorical()을 먼저 거쳐야 함.
     #   -> fallback은 _prepare_xy()로 옮겨 eval/threshold_df 양쪽에 공통 적용.
     # 목적: model.predict()의 기본 threshold(0.5)는 극단적 클래스 불균형(피싱 1% vs 정상 99%)
-    # 데이터에서는 최적이 아닐 수 있음(양성 확률이 0.5를 잘 못 넘어서 recall이 과도하게 낮게 나올 수 있음). 
+    # 데이터에서는 최적이 아닐 수 있음(양성 확률이 0.5를 잘 못 넘어서 recall이 과도하게 낮게 나올 수 있음).
     # 그래서 확률(proba)만 뽑아서, precision-recall curve 상에서 F1이 최대가 되는 threshold를 직접 탐색해 적용함.
     #   -> 탐색은 threshold_df(없으면 df), 적용은 평가셋 df. thresholds가 비면 0.5로 fallback.
     # 주의(한계): 지금은 별도의 검증셋이 없어서(run_final()도 train/test 2분할만 씀),
@@ -209,7 +209,7 @@ def evaluate(model, df, feature_cols=None, threshold_df=None):
         # PR-AUC: precision-recall auc로 베이스라인 대비 압도적으로 높다는 것을 보임()
         "PR-AUC": pr_auc(y, proba),
         # Top-K : 상위층에서 흔들림 없이 잘 잡아주는지.
-        "Lift@Top5%" : lift_5p,
-        "Lift@Top10%" : lift_10p,
-        "Lift@Top20%" : lift_20p,
+        "Lift@Top5%": lift_5p,
+        "Lift@Top10%": lift_10p,
+        "Lift@Top20%": lift_20p,
     }
