@@ -74,7 +74,7 @@ def save_sensitivity_result(
 
 
 def run_sensitivity(
-    param_name: str,                    # 스윕 대상인 feature 이름. config.py 변수명이 아니라 generator의 _get_soph() 조회 key(한글)  ex) "URL_존재확률"
+    param_name: str,                    # 스윕 대상인 feature 이름. config.py 변수명이 아니라 get_soph() 조회 key  ex) "url_rate"
     candidate_values: List[str],        # param_name에 하나씩 대입해볼 값 목록. sweep_target="sophistication"이면 [LOW, MID, HIGH], "subgroup_ratio_key"면 ["A".."E"]
     fixed_config,                       # config.py 모듈. param_name 외 나머지 값은 전부 여기서 그대로(고정) 가져다 씀. Detection/ 안에서 config.py import 하지 않기 위한 parameter.
     sweep_target: str = "sophistication",  # 무엇을 스윕할지: "sophistication"(get_soph() 기반 feature) | "subgroup_ratio_key"(RELATION_TYPE_RATIO, A~E)
