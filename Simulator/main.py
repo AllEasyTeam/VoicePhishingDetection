@@ -11,8 +11,29 @@ from Simulator.schema_utils import get_feature_columns
 
 # 최종 모드 실행 파라미터. "이번 최종 실행을 어떻게 돌릴지"에 대한 파이프라인 설정값이라 main.py에 지역 상수로 둠.
 N = 100000                  # 생성할 사건 수
-SUBGROUP_RATIO_KEY = "B"   # 정상 이벤트 하위집단(지인/기관) 비중 키 (민감도 분석 진행 후 확정)
+SUBGROUP_RATIO_KEY = "D"   # 정상 이벤트 하위집단(지인/기관) 비중 키 (민감도 분석 결과 B->D로 확정)
 GEN_SEED = 42              # build_dataset()용 random_state
+
+# 최종 dataset 생성 시 각 feature에 적용할 sophistication. 민감도 분석(필요 시 K=10/stress 모드
+# 재검증까지 거쳐) 결과로 확정한 값. build_dataset()의 sophistication 인자로 그대로 넘어감
+# (_get_soph()가 dict에서 SOPH_* key를 직접 조회 -> 12개 전부 채워져 있어 "__base__" 폴백은 안 씀).
+FINAL_SOPHISTICATION = {
+    # 하나
+    config.SOPH_NUMBER_TYPE_BAND: "mid",
+    config.SOPH_FIRST_CONTACT: "high",
+    config.SOPH_REPEAT_GAP: "low",           # K=10 재검증 완료
+    config.SOPH_REPEAT_CONTACT: "mid",
+    # 지민
+    config.SOPH_NUM_IN_MSG: "mid",           # stress 모드로 재검증
+    config.SOPH_INNER_NUM_DIFFERS: "mid",
+    config.SOPH_MSG_OFFICIAL_MATCH: "high",
+    config.SOPH_SMS_TO_CALL_GAP: "mid",      # K=10 재검증 완료
+    # 다은
+    config.SOPH_URL_RATE: "mid",             # stress 모드로 재검증
+    config.SOPH_APP_INSTALL: "low",
+    config.SOPH_SEQUENTIAL_CALLERS: "mid",
+    config.SOPH_SMS_TO_CALL: "high",
+}
 
 # Track별 접근 가능 feature 시나리오 (누적 구조: 통신사가 가장 넓은 범위에 접근 가능).
 # 최종 dataset 1개를 그대로 두고, 시나리오별로 사용하는 컬럼만 달라짐.
@@ -77,6 +98,7 @@ def run_final():
         subgroup_ratio_key=SUBGROUP_RATIO_KEY,
         random_state=GEN_SEED,
         config=config,
+        sophistication=FINAL_SOPHISTICATION,
     )
     df = prepare_categorical(df)  # train/test로 나뉘기 전에 category dtype 한 번만 확정
 
