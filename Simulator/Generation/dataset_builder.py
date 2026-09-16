@@ -14,18 +14,25 @@ from typing import Union, Dict, Optional
 
 from Simulator.Generation.normal_generator import generate_normal_event
 from Simulator.Generation.phishing_generator import generate_phishing_event
+from Simulator.schema import Track
+from Simulator.schema_utils import (
+    get_feature_columns,
+    get_non_nullable_columns,
+    get_schema_column_names,
+)
+
 
 def build_dataset(
-    n: int, 
-    phishing_rate: float, 
-    config, 
+    n: int,
+    phishing_rate: float,
+    config,
     sophistication: Union[str, Dict[str, str]] = "mid",
     subgroup_ratio_key: str = "B",
     random_state: Optional[int] = None
 ) -> pd.DataFrame:
     """
     Algorithm 1 전체 의사 코드를 1:1로 구현한 데이터셋 생성 함수
-    
+
     Require:
     - n: 생성할 사건 수 (int)
     - phishing_rate: 클래스 불균형 비율 (float, 0~1)
@@ -68,25 +75,25 @@ def build_dataset(
             # 7: generate_phishing_event(피싱 유형, sophistication, config) 호출 -> 피싱 event 생성
             event = generate_phishing_event(
                 p_type=p_type,
-                sophistication=sophistication, 
+                sophistication=sophistication,
                 config=config
             )
         # 8: 이번 사건이 정상 사건인 경우
         else:
             # 9: subgroup <- 하위집단 확률적 선택
             subgroup = random.choices(subgroup_names, weights=subgroup_weights)[0]
-            
+
             # 10: generate_normal_event(하위집단, config, sophistication) 호출 -> 정상 event 생성
             event = generate_normal_event(
-                subgroup=subgroup, 
-                config=config, 
+                subgroup=subgroup,
+                config=config,
                 sophistication=sophistication
             )
 
         # 11: event는 dict. is_phishing이 True(=피싱 사건), False(=정상 사건) 여부에 따라 "is_phishing" key, value 새로 추가.
         event["is_phishing"] = 1 if is_phishing else 0
 
-        # 12: event는 dict. is_phishing 값에 따라서, "incident_type" key, value 추가. (피싱 사건이면 피싱 유형) 
+        # 12: event는 dict. is_phishing 값에 따라서, "incident_type" key, value 추가. (피싱 사건이면 피싱 유형)
         if is_phishing:
             event["incident_type"] = p_type
         else:
@@ -97,22 +104,24 @@ def build_dataset(
 
     # 14: return dataset (DataFrame 변환 및 셔플링-dataset 생성에서 순서 의존성 차단 목적)
     df = pd.DataFrame(dataset)
+    #최종 표 순서 스키마 기준으로 고정
+    schema_cols = [c for c in get_schema_column_names() if c in df.columns]
+    extra_cols = [c for c in df.columns if c not in schema_cols]
+    df = df[schema_cols + extra_cols]
     return df.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
+
 
 def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> bool:
     """
     생성된 데이터셋의 스키마 결측치 및 비즈니스 규칙 정합성을 검증하고 리포트를 출력
-    
+
     Args:
         df: 검증할 데이터프레임
         preview_sample_size: 미리보기에 표시할 행 개수 (기본값: 10)
-    
+
     Returns:
         bool: 모든 검증 규칙이 통과하면 True, 하나라도 실패하면 False
     """
-    from Simulator.schema import Track
-    from Simulator.schema_utils import get_feature_columns, get_non_nullable_columns
-    
     # 1. 기본 생성 현황 확인
     print("=" * 80)
     print(f"[합성 데이터 {len(df)}건 생성 결과] (총 {len(df)}건)")
@@ -129,9 +138,8 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
         "sms_to_call", "sms_to_call_gap", "is_url_in_msg", "has_appinstall_link",
         "is_sequential_callers", "is_phishing", "incident_type",
     ]
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.width", 1000)
-    print(df[preview_cols].head(preview_sample_size).to_string())
+    with pd.option_context("display.max_columns", None, "display.width", 1000):
+        print(df[preview_cols].head(preview_sample_size).to_string())
 
     # 2. 스키마 결측치 및 비즈니스 규칙 정합성 검증
     print("\n" + "=" * 80)
@@ -147,24 +155,24 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
     rule1_num = (df[df["is_num_in_msg"] == 0]["inner_num_differs"].isna()).all()
     rule1_url = (df[df["is_url_in_msg"] == 0][["is_reliable_url", "has_appinstall_link"]].isna()).all().all()
 
-    # 규칙 3: 항상 관측되어야 하는 컬럼 검증 (schema_utils: nullable=False 컬럼 전체)
+    # 규칙 2: 항상 관측되어야 하는 컬럼 검증 (schema_utils: nullable=False 컬럼 전체)
     # 목적: nullable=False로 정의된 컬럼(schema상 "결측이 있으면 안 되는" 컬럼)이 실제 생성된 데이터에서도
     #       하나도 빠짐없이 채워졌는지 확인. generator가 실수로 조건 없이 NaN을 넣는 버그를 잡기 위함.
     always_observed_cols = get_non_nullable_columns()
-    rule3_check = (df[always_observed_cols].isna().sum().sum() == 0)
+    rule2_check = (df[always_observed_cols].isna().sum().sum() == 0)
 
-    # 규칙 4: Track A(통신사) 전용 컬럼 (전부 NaN이어야 함) (schema_utils: Track.CARRIER 컬럼 전체)
+    # 규칙 3: Track A(통신사) 전용 컬럼 (전부 NaN이어야 함) (schema_utils: Track.CARRIER 컬럼 전체)
     # 목적: 통신사 실측자료 자체가 없는 시뮬레이터 환경에서는 Track.CARRIER 컬럼 값 존재 불가.
     #       혹시라도 generator가 이 컬럼들에 값을 채워 넣었다면, 실제로 없는 데이터를 있는 것처럼
     #       만들어낸 것이므로 오류로 간주.
     carrier_cols = get_feature_columns(track_filter=[Track.CARRIER])
-    rule4_check = (df[carrier_cols].isna().all()).all()
+    rule3_check = (df[carrier_cols].isna().all()).all()
 
-    # 특수 규칙: 순차복수사칭은 NaN 없이 0 또는 1이어야 함
-    # 목적: is_sequential_callers는 nullable=False라 규칙 3으로 결측 여부는 이미 걸러지지만,
+    # 규칙 4: 순차복수사칭은 NaN 없이 0 또는 1이어야 함
+    # 목적: is_sequential_callers는 nullable=False라 규칙 2로 결측 여부는 이미 걸러지지만,
     #       "값이 정확히 0 또는 1이어야 한다"는 값 범위 제약은 schema.py에 저장할 필드가 없어서
     #       (ColumnSchema에 허용값 목록 개념이 없음) schema_utils로 대체 불가능. 그래서 값 범위까지 직접 검사.
-    special_rule_check = (df["is_sequential_callers"].isna().sum() == 0) and (df["is_sequential_callers"].isin([0, 1]).all())
+    rule4_check = (df["is_sequential_callers"].isna().sum() == 0) and (df["is_sequential_callers"].isin([0, 1]).all())
 
     ok, fail = "PASS", "FAIL"
     print("1. [규칙 1] 선행 조건 미충족 시 NaN 처리:")
@@ -172,35 +180,27 @@ def validate_check_dataset(df: pd.DataFrame, preview_sample_size: int = 10) -> b
     print(f"   - 연계 0 -> sms_to_call_gap NaN: {ok if rule1_sms else fail}")
     print(f"   - 문자 내 번호 0 -> inner_num_differs NaN: {ok if rule1_num else fail}")
     print(f"   - URL 0 -> 도메인/앱설치 링크 NaN: {ok if rule1_url else fail}")
-    
-    print(f"2. [규칙 3] 항상 관측 컬럼 결측치 0건 유지: {ok if rule3_check else fail}")
-    print(f"3. [규칙 4] Track A 데이터 접근 불가(전부 NaN): {ok if rule4_check else fail}")
-    print(f"4. [특수규칙] 순차복수사칭 확정적 0/1 채움 (NaN 없음): {ok if special_rule_check else fail}")
+
+    print(f"2. [규칙 2] 항상 관측 컬럼 결측치 0건 유지: {ok if rule2_check else fail}")
+    print(f"3. [규칙 3] Track A 데이터 접근 불가(전부 NaN): {ok if rule3_check else fail}")
+    print(f"4. [규칙 4] 순차복수사칭 확정적 0/1 채움 (NaN 없음): {ok if rule4_check else fail}")
     print("=" * 80)
-    
+
     # 모든 검증 결과 반환
-    all_passed = rule1_prior and rule1_sms and rule1_num and rule1_url and rule3_check and rule4_check and special_rule_check
+    all_passed = rule1_prior and rule1_sms and rule1_num and rule1_url and rule2_check and rule3_check and rule4_check
     return all_passed
 
-#소량 생성 검증용 테스트 코드. 추후 삭제
-if __name__ == "__main__":
-    import sys
-    from pathlib import Path
 
-    # 단독 실행 시 상위 패키지 경로 탐색 보정
-    current_dir = Path(__file__).resolve().parent
-    project_root = current_dir.parent.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-        
+# 소량 생성 검증용 테스트 코드. 추후 삭제
+if __name__ == "__main__":
     from Simulator.Generation import config
 
-    # 1. 20건 생성 (검증을 위해 피싱 비율을 임의로 상향 설정)
+    # 1. sample_size, phishing_rate 등 값 수정으로 실행
     sample_size = 20
     df_sample = build_dataset(
-        n=sample_size, 
-        phishing_rate=0.3, 
-        config=config, 
+        n=sample_size,
+        phishing_rate=0.3,
+        config=config,
         sophistication=config.MID,
         subgroup_ratio_key="B",
         random_state=42

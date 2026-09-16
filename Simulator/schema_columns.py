@@ -92,3 +92,6 @@ SCHEMA: list[ColumnSchema] = [
 
     ColumnSchema("is_sequential_callers", "순차복수사칭 여부", ValueType.BINARY, Track.DEVICE),  # 이 사건 안 복수번호 릴레이 여부
 ]
+# 파생 feature 13개는 전부 ablation 검증 대기 중이라 SCHEMA에 등록하지 않음
+# (Detection/derived_features.py의 add_candidate_features() 참고). 검증 후 유의미하다고
+# 확인된 것만 여기 등록해서 get_feature_columns()/실제 학습에 반영할 예정.

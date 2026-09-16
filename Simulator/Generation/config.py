@@ -45,7 +45,7 @@ SUBGROUP_INSTITUTION_CORPORATE = "subgroup_institution_corporate" # 기관_기�
 
 # ============================================================
 # sophistication 조회용 feature key 상수 선언
-# normal_generator.py / phishing_generator.py의 _get_soph(sophistication, key)
+# generator_utils.get_soph(sophistication, key)
 # 호출부와 main.py의 SENSITIVITY_PARAMS가 공유해서 사용.
 # (한글 문자열을 직접 여러 곳에 반복 입력하면 오타가 나도 에러 없이
 #  "mid"로 조용히 넘어가므로, 상수로 선언해 오타 시 NameError로 즉시 드러나게 함)
@@ -186,8 +186,9 @@ WHITELIST_NUMS=[
     # 기본 형식: {"번호": "", "기관명": ""},
 ]
 
-#빠른 조회용
-WHITELIST_SET = {normalize(item["번호"])  for item in WHITELIST_NUMS}
+# 빠른 조회용. LIST는 random.choice용으로 한 번만 만들어 두고 재사용.
+WHITELIST_SET = {normalize(item["번호"]) for item in WHITELIST_NUMS}
+WHITELIST_LIST = list(WHITELIST_SET)
 
 
 # ============================================================
@@ -519,4 +520,34 @@ PHISHING_USING_DURATION = {
     "1일이내": 0.58,
     "1일초과_1개월이내": 0.31,
     "1개월초과": 0.11,
+}
+
+
+# ============================================================
+# Stress 모드(가정-파괴) 시나리오 정의
+# run_sensitivity()는 low/mid/high 3개 preset 중 어느 게 나은지만 비교하지만,
+# 그 preset 값 자체가 "순수가정"(위 NORMAL_IS_NUM_IN_MSG / NORMAL_IS_URL_IN_MSG 주석 참고)인
+# 경우엔 그 절대값이 틀렸을 때 성능이 얼마나 흔들리는지도 확인할 필요가 있음.
+# → sophistication은 "mid"로 고정하고, 아래 각 level마다 config 속성(dict)을 통째로 덮어써서
+#   연속적인 확률값을 스윕(run_stress_sensitivity()가 실행 중에만 적용 후 자동 복구).
+# level dict의 LOW/HIGH key는 구조 유지를 위한 참고값일 뿐, 실제로 쓰이는 값은 MID key 하나뿐.
+# ============================================================
+STRESS_NUM_IN_MSG_KEY = "stress_num_in_msg"
+STRESS_NUM_IN_MSG_LEVELS = {
+    "very_low":  {"NORMAL_IS_NUM_IN_MSG": {LOW: 0.30, MID: 0.15, HIGH: 0.60}},
+    "low":       {"NORMAL_IS_NUM_IN_MSG": {LOW: 0.30, MID: 0.30, HIGH: 0.60}},
+    "baseline":  {"NORMAL_IS_NUM_IN_MSG": {LOW: 0.30, MID: 0.45, HIGH: 0.60}},  # 현재 실사용 MID 값(원본과 동일)
+    "high":      {"NORMAL_IS_NUM_IN_MSG": {LOW: 0.30, MID: 0.60, HIGH: 0.60}},
+    "very_high": {"NORMAL_IS_NUM_IN_MSG": {LOW: 0.30, MID: 0.75, HIGH: 0.60}},
+    "extreme":   {"NORMAL_IS_NUM_IN_MSG": {LOW: 0.30, MID: 0.90, HIGH: 0.60}},
+}
+
+STRESS_URL_RATE_KEY = "stress_url_rate"
+STRESS_URL_RATE_LEVELS = {
+    "very_low":  {"NORMAL_IS_URL_IN_MSG": {LOW: 0.10, MID: 0.05, HIGH: 0.50}},
+    "low":       {"NORMAL_IS_URL_IN_MSG": {LOW: 0.10, MID: 0.10, HIGH: 0.50}},
+    "baseline":  {"NORMAL_IS_URL_IN_MSG": {LOW: 0.10, MID: 0.30, HIGH: 0.50}},  # 현재 실사용 MID 값(원본과 동일)
+    "high":      {"NORMAL_IS_URL_IN_MSG": {LOW: 0.10, MID: 0.50, HIGH: 0.50}},
+    "very_high": {"NORMAL_IS_URL_IN_MSG": {LOW: 0.10, MID: 0.70, HIGH: 0.50}},
+    "extreme":   {"NORMAL_IS_URL_IN_MSG": {LOW: 0.10, MID: 0.90, HIGH: 0.50}},
 }

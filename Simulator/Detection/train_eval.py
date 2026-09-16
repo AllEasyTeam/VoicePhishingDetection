@@ -1,4 +1,21 @@
 # 분할->학습->평가 모두 한 번에 처리하는 파일.
+import numpy as np
+import xgboost as xgb
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+    confusion_matrix,
+    precision_recall_curve,
+    auc,
+)
+from sklearn.model_selection import train_test_split
+
+from Simulator.schema_utils import get_feature_columns, get_non_feature_columns
+
+
 def prepare_categorical(df):
     # XGBoost 학습/평가용 dtype 준비: 문자열(범주형) 컬럼을 category dtype으로 변환.
     # train/val/test, K-Fold 등으로 나뉘기 "전" df 전체에 반드시 한 번만 호출해야 함.
@@ -13,26 +30,32 @@ def prepare_categorical(df):
     return df
 
 
+def _resolve_feature_cols(feature_cols):
+    # feature_cols 존재하는 경우: Track 시나리오(Track A,B,C)나 ablation용 커스텀 컬럼 목록이 넘어온 경우 -> 그대로 사용
+    # feature_cols 존재하지 않는 경우: 민감도 분석 진행 -> 전체 feature 모두 사용
+    # 방어적 필터: is_feature=False인 컬럼(phone_number, call_time 등)만 걸러냄("SCHEMA 등록
+    # 여부"가 아니라 "is_feature=False 여부"만 봄) -> SCHEMA에 아직 없는 파생 feature 후보
+    # (ablation 검증용)도 df에 실제 컬럼으로 존재하기만 하면 정상적으로 학습에 쓸 수 있음.
+    banned_cols = set(get_non_feature_columns())
+    cols = feature_cols or get_feature_columns()
+    return [c for c in cols if c not in banned_cols]
+
+
 def split_data(df):
     # dataframe을 train, test set으로 분할하는 함수.
     # train: 70%  test: 30% 으로 분할.
     # dataset 자체를 분할하기 때문에, get_feature_columns() 등의 schema_utils 함수는 호출하지 않음.
-    from sklearn.model_selection import train_test_split
-
-    # train과 test set으로 분할.
     train, test = train_test_split(
         df,
-        test_size = 0.3, # 30%를 test set으로 분할.
-        random_state = 42, # 재현성 확보를 위해 random_state 고정.(값이 중요한 게 아님. 동일 값을 사용하는 게 중요.)
-        stratify = df["is_phishing"]
+        test_size=0.3,  # 30%를 test set으로 분할.
+        random_state=42,  # 재현성 확보를 위해 random_state 고정.(값이 중요한 게 아님. 동일 값을 사용하는 게 중요.)
+        stratify=df["is_phishing"],
     )
-
     return train, test
+
 
 def pr_auc(y, proba):
     # Precision-Recall AUC.
-    from sklearn.metrics import precision_recall_curve, auc
-
     p, r, _ = precision_recall_curve(y, proba)
     return float(auc(r, p))
 
@@ -44,8 +67,6 @@ def lift_at_top_k(y, proba, k=0.05):
     - proba: 모델이 예측한 피싱 확률
     - k: 상위 표본 비율 (0.05=상위 5%, 0.1=상위 10%, 0.2=상위 20%)
     """
-    import numpy as np
-
     y_arr = np.array(y)
     cutoff = max(int(np.ceil(len(y_arr) * k)), 1)
 
@@ -66,16 +87,7 @@ def train_model(df, val=None, feature_cols=None):
     # val 없이 호출함(최종 모드도 train/test 2분할만 씀) -> 아래 val 분기는 지금 호출
     # 경로에서는 안 타지만, 나중에 조기종료가 다시 필요해지면 val을 넘기기만 하면 되도록 남겨둠.
     # feature_cols: 학습에 사용할 feature 컬럼 목록. Track 시나리오별로 다르게 넘어옴. 민감도 분석에서는 전체 feature 사용.
-    import xgboost as xgb
-    from Simulator.schema_utils import get_feature_columns
-
-    # feature_cols 존재하는 경우: Track 시나리오가 넘어온 경우(Track A,B,C) -> 해당 feature만 사용
-    # feature_cols 존재하지 않는 경우: 민감도 분석 진행 -> 전체 feature 모두 사용
-    feature_cols = feature_cols or get_feature_columns()
-    # 방어적 필터: feature_cols에 is_feature=False인 컬럼(phone_number, call_time 등)이
-    # 실수로 섞여 들어와도 여기서 한 번 더 걸러냄.
-    valid_cols = set(get_feature_columns())
-    feature_cols = [c for c in feature_cols if c in valid_cols]
+    feature_cols = _resolve_feature_cols(feature_cols)
     X = df[feature_cols].copy()
     y = df["is_phishing"]
 
@@ -132,21 +144,7 @@ def evaluate(model, df, feature_cols=None, threshold_df=None):
     # accuracy / precision / recall / F1 / confusion_matrix / feature importance 반환.
     # feature_cols: train_model()과 동일한 컬럼 목록을 넘겨야 함(Track 시나리오 일치 필요).
     # threshold_df: threshold 탐색용 데이터(보통 train). None이면 df에서 탐색(낙관 편향 가능).
-    from sklearn.metrics import (
-        accuracy_score,
-        precision_score,
-        recall_score,
-        f1_score,
-        classification_report,
-        confusion_matrix,
-        precision_recall_curve,
-    )
-    from Simulator.schema_utils import get_feature_columns
-
-    feature_cols = feature_cols or get_feature_columns()
-    # 방어적 필터: feature_cols에 is_feature=False인 컬럼이 섞여 들어와도 한 번 더 걸러냄.
-    valid_cols = set(get_feature_columns())
-    feature_cols = [c for c in feature_cols if c in valid_cols]
+    feature_cols = _resolve_feature_cols(feature_cols)
 
     # train_model()과 동일하게, 실제 category dtype 변환은 prepare_categorical()이 분할 전에
     # 이미 끝내둠. 여기 있는 건 그걸 거치지 않고 바로 호출된 경우를 위한 방어용 fallback일 뿐
@@ -154,7 +152,7 @@ def evaluate(model, df, feature_cols=None, threshold_df=None):
     # 반드시 prepare_categorical()을 먼저 거쳐야 함.
     #   -> fallback은 _prepare_xy()로 옮겨 eval/threshold_df 양쪽에 공통 적용.
     # 목적: model.predict()의 기본 threshold(0.5)는 극단적 클래스 불균형(피싱 1% vs 정상 99%)
-    # 데이터에서는 최적이 아닐 수 있음(양성 확률이 0.5를 잘 못 넘어서 recall이 과도하게 낮게 나올 수 있음). 
+    # 데이터에서는 최적이 아닐 수 있음(양성 확률이 0.5를 잘 못 넘어서 recall이 과도하게 낮게 나올 수 있음).
     # 그래서 확률(proba)만 뽑아서, precision-recall curve 상에서 F1이 최대가 되는 threshold를 직접 탐색해 적용함.
     #   -> 탐색은 threshold_df(없으면 df), 적용은 평가셋 df. thresholds가 비면 0.5로 fallback.
     # 주의(한계): 지금은 별도의 검증셋이 없어서(run_final()도 train/test 2분할만 씀),
@@ -209,7 +207,7 @@ def evaluate(model, df, feature_cols=None, threshold_df=None):
         # PR-AUC: precision-recall auc로 베이스라인 대비 압도적으로 높다는 것을 보임()
         "PR-AUC": pr_auc(y, proba),
         # Top-K : 상위층에서 흔들림 없이 잘 잡아주는지.
-        "Lift@Top5%" : lift_5p,
-        "Lift@Top10%" : lift_10p,
-        "Lift@Top20%" : lift_20p,
+        "Lift@Top5%": lift_5p,
+        "Lift@Top10%": lift_10p,
+        "Lift@Top20%": lift_20p,
     }
