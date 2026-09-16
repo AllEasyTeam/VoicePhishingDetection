@@ -4,7 +4,7 @@
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical
-from Simulator.Detection.sensitivity_analysis import run_sensitivity
+from Simulator.Detection.sensitivity_analysis import run_sensitivity, run_stress_sensitivity
 from Simulator.schema import Track
 from Simulator.schema_utils import get_feature_columns
 
@@ -45,7 +45,27 @@ SENSITIVITY_PARAMS = [
 ]
 
 # mode="each_sen"일 때 확인할 feature 1개. 바꾸고 싶으면 이 줄만 수정(config.SOPH_* 중 하나).
-EACH_SENSITIVITY_PARAM = config.SOPH_REPEAT_CONTACT
+EACH_SENSITIVITY_PARAM = config.SOPH_SMS_TO_CALL_GAP
+
+# mode="each_sen"일 때 쓸 K. 기본 5(표준). 재검증하려면 이 줄만 10으로 수정 ->
+# sensitivity_results/<param_name>_k10.json으로 기존 K=5 결과와 별도 저장됨.
+EACH_SENSITIVITY_K = 10
+
+
+# mode="stress" 대상 시나리오 목록. run_stress_sensitivity()의 scenario_key/level_overrides로 그대로 넘어감.
+# config.py의 STRESS_*_KEY / STRESS_*_LEVELS 상수와 짝을 맞춰서 등록.
+# "순수가정"으로 정한 feature(예: num_in_msg, url_rate)의 절대값 자체가 틀렸을 때 성능이
+# 얼마나 흔들리는지 확인하기 위한 것으로, low/mid/high 3-preset 비교인 SENSITIVITY_PARAMS와는 별개.
+STRESS_SCENARIOS = {
+    config.STRESS_NUM_IN_MSG_KEY: config.STRESS_NUM_IN_MSG_LEVELS,
+    config.STRESS_URL_RATE_KEY: config.STRESS_URL_RATE_LEVELS,
+}
+
+# mode="stress"일 때 확인할 시나리오 1개. 바꾸고 싶으면 이 줄만 수정(STRESS_SCENARIOS의 key 중 하나).
+STRESS_SCENARIO_KEY = config.STRESS_URL_RATE_KEY
+
+# mode="stress"일 때 쓸 K. 기본 5(표준).
+STRESS_K = 5
 
 
 def run_final():
@@ -108,9 +128,11 @@ def run_sensitivity_ratio_mode():
     )
     return summary
 
-def run_sensitivity_each_feature_mode(param_name):
-    """각 feature에 대해 진행 가능하도록 하는 함수(run_sensitivity_mode()는 전체 feature에 대해서.)"""
-    # run_sensitivity() 안에서 sensitivity_results/<param_name>.json으로 자동 저장됨.
+def run_sensitivity_each_feature_mode(param_name, k=5):
+    """각 feature에 대해 진행 가능하도록 하는 함수(run_sensitivity_mode()는 전체 feature에 대해서.)
+    k: 기본 5(표준). 재검증 등으로 늘리고 싶으면(예: 10) 여기로 넘기면 됨 ->
+       sensitivity_results/<param_name>_k<k>.json으로 기존 K=5 결과와 별도 저장됨."""
+    # run_sensitivity() 안에서 sensitivity_results/<param_name>.json(또는 _k<k>.json)으로 자동 저장됨.
     summary = run_sensitivity(
         param_name = param_name,
         candidate_values = ["low", "mid", "high"],
@@ -118,28 +140,57 @@ def run_sensitivity_each_feature_mode(param_name):
         phishing_rate = config.CLASS_IMBALANCE,
         n = N,
         subgroup_ratio_key=SUBGROUP_RATIO_KEY,
+        k=k,
     )
 
     return summary
 
 
-def main(mode: str, param_name=None):
-    # param_name: mode="each_sen"일 때만 사용. 직접 Python으로 호출할 때만 넘기는 선택 인자이고,
-    # CLI(-m each_sen)로는 안 받음 -> 코드 상단의 EACH_SENSITIVITY_PARAM을 바꿔서 확인할 feature를 정함.
+def run_stress_mode(scenario_key=None, k=None):
+    """가정-파괴(stress) 모드: scenario_key 1개에 대해 run_stress_sensitivity() 호출.
+    sophistication은 "mid" 고정, config.py의 STRESS_*_LEVELS에 정의된 level별로 확률/θ 절대값만 스윕."""
+    scenario_key = scenario_key or STRESS_SCENARIO_KEY
+    k = k or STRESS_K
+    if scenario_key not in STRESS_SCENARIOS:
+        raise ValueError(
+            f"알 수 없는 stress scenario_key: {scenario_key!r}. STRESS_SCENARIOS 중 하나여야 함: {list(STRESS_SCENARIOS)}"
+        )
+    # run_stress_sensitivity() 안에서 sensitivity_results/<scenario_key>.json(또는 _k<k>.json)으로 자동 저장됨.
+    summary = run_stress_sensitivity(
+        scenario_key=scenario_key,
+        level_overrides=STRESS_SCENARIOS[scenario_key],
+        fixed_config=config,
+        description=f"{scenario_key} 가정-파괴(stress) 검증",
+        phishing_rate=config.CLASS_IMBALANCE,
+        n=N,
+        subgroup_ratio_key=SUBGROUP_RATIO_KEY,
+        k=k,
+    )
+    return summary
+
+
+def main(mode: str, param_name=None, k=None, scenario_key=None):
+    # param_name/k: mode="each_sen"일 때만 사용. scenario_key/k: mode="stress"일 때만 사용.
+    # 둘 다 직접 Python으로 호출할 때만 넘기는 선택 인자이고, CLI(-m each_sen / -m stress)로는 안 받음
+    # -> 코드 상단의 EACH_SENSITIVITY_PARAM/EACH_SENSITIVITY_K, STRESS_SCENARIO_KEY/STRESS_K를
+    # 바꿔서 확인할 feature(또는 시나리오)/K를 정함(안 넘기면 그 상수값을 그대로 씀).
     if mode == "final":
         result = run_final()
     elif mode == "sen":
         result = run_sensitivity_mode()
     elif mode == "each_sen":
         param_name = param_name or EACH_SENSITIVITY_PARAM
+        k = k or EACH_SENSITIVITY_K
         # param_name이 SENSITIVITY_PARAMS(유효한 SOPH_* 값 목록)에 있는지 방어적으로 한 번 더 확인.
         if param_name not in SENSITIVITY_PARAMS:
             raise ValueError(
                 f"알 수 없는 param_name: {param_name!r}. SENSITIVITY_PARAMS 중 하나여야 함: {SENSITIVITY_PARAMS}"
             )
-        result = run_sensitivity_each_feature_mode(param_name)
+        result = run_sensitivity_each_feature_mode(param_name, k=k)
     elif mode == "ratio":
         result = run_sensitivity_ratio_mode()
+    elif mode == "stress":
+        result = run_stress_mode(scenario_key=scenario_key, k=k)
     else:
         raise ValueError(f"알 수 없는 mode: {mode}")
 
@@ -152,17 +203,21 @@ def main(mode: str, param_name=None):
 #   python -X utf8 -m Simulator.main -m final     -> 최종 dataset 생성 -> 학습 -> 평가 (Track B/C)
 #   python -X utf8 -m Simulator.main -m sen       -> SENSITIVITY_PARAMS 전체 + subgroup_ratio_key 스윕
 #                                                     (feature마다 sensitivity_results/<param_name>.json 자동 저장)
-#   python -X utf8 -m Simulator.main -m each_sen  -> feature 1개만 스윕(위 EACH_SENSITIVITY_PARAM 값 사용).
-#                                                     확인할 feature를 바꾸려면 CLI가 아니라 코드 상단의
-#                                                     EACH_SENSITIVITY_PARAM 줄을 직접 수정할 것.
+#   python -X utf8 -m Simulator.main -m each_sen  -> feature 1개만 스윕(위 EACH_SENSITIVITY_PARAM/EACH_SENSITIVITY_K 값 사용).
+#                                                     확인할 feature나 K를 바꾸려면 CLI가 아니라 코드 상단의
+#                                                     EACH_SENSITIVITY_PARAM/EACH_SENSITIVITY_K 줄을 직접 수정할 것.
 #   python -X utf8 -m Simulator.main -m ratio     -> 지인:기관 하위집단 비중(RELATION_TYPE_RATIO, A~E)만 스윕
+#   python -X utf8 -m Simulator.main -m stress    -> 가정-파괴(stress) 모드: sophistication은 "mid" 고정,
+#                                                     STRESS_SCENARIO_KEY 시나리오 1개의 확률/θ 절대값만 스윕
+#                                                     (위 STRESS_SCENARIO_KEY/STRESS_K 값 사용). 시나리오나 K를
+#                                                     바꾸려면 CLI가 아니라 코드 상단의 두 줄을 직접 수정할 것.
 #   -m은 --mode의 짧은 별칭.
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Voice Phishing Detection 시뮬레이터 파이프라인 실행")
     parser.add_argument(
-        "-m", "--mode", default="final", choices=["final", "sen", "each_sen", "ratio"],
+        "-m", "--mode", default="final", choices=["final", "sen", "each_sen", "ratio", "stress"],
         help="실행 모드 (기본값: final)",
     )
     args = parser.parse_args()
