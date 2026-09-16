@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "n": 5000,
+  "gen_seed": 42,
+  "subgroup_ratio_key": "D",
+  "sophistication": {
+    "number_type_band": "mid",
+    "first_contact": "high",
+    "repeat_gap": "low",
+    "repeat_contact": "mid",
+    "num_in_msg": "mid",
+    "inner_num_differs": "mid",
+    "msg_official_match": "high",
+    "sms_to_call_gap_soph": "mid",
+    "url_rate": "mid",
+    "app_install": "low",
+    "sequential_callers": "mid",
+    "sms_to_call_soph": "high"
+  }
+}

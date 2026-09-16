@@ -1,7 +1,9 @@
 # Simulator 코드 작성을 위한 main.py
 # 역할: 전체 파이프라인의 진입점. mode에 따라 Generation과 Detection을 순서대로 호출.
 
+import json
 from pathlib import Path
+import pandas as pd
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical
@@ -20,9 +22,17 @@ N = 100000                  # 생성할 사건 수
 SUBGROUP_RATIO_KEY = "D"   # 정상 이벤트 하위집단(지인/기관) 비중 키 (민감도 분석 결과 B->D로 확정)
 GEN_SEED = 42              # build_dataset()용 random_state
 
+# DataSet/final_dataset 캐시 무효화용 버전. N/GEN_SEED/SUBGROUP_RATIO_KEY/FINAL_SOPHISTICATION은
+# 바뀌면 자동으로 감지되지만(fingerprint 비교), "생성 로직 자체"가 바뀌는 경우(코드는 바뀌었는데
+# 위 파라미터 값은 그대로인 경우)는 자동으로 감지가 안 되므로, 그럴 때 이 숫자를 수동으로 올려야
+# get_or_generate_final_dataset()이 저장된 dataset을 재사용하지 않고 강제로 다시 생성함.
+# TODO: 파생 feature ablation 검증이 끝나서 add_candidate_features()를 generate_final_dataset()에
+#       연결하게 되면, 그 시점에 이 값을 1 -> 2로 올릴 것(그래야 파생 feature 없이 저장된
+#       기존 dataset이 재사용되지 않고 파생 feature 포함 버전으로 다시 생성됨).
+DATASET_GEN_VERSION = 1
+
 # 최종 dataset 생성 시 각 feature에 적용할 sophistication. 민감도 분석(필요 시 K=10/stress 모드
 # 재검증까지 거쳐) 결과로 확정한 값. build_dataset()의 sophistication 인자로 그대로 넘어감
-# (get_soph()가 dict에서 SOPH_* key를 직접 조회 -> 12개 전부 채워져 있어 "__base__" 폴백은 안 씀).
 FINAL_SOPHISTICATION = {
     # 하나
     config.SOPH_NUMBER_TYPE_BAND: "mid",
@@ -100,17 +110,56 @@ ABLATION_MULTICOLLINEARITY_THRESHOLD = None
 ABLATION_LEAKAGE_THRESHOLD = None
 
 
+# ------------------------------------------------------------
+# 최종 dataset 캐싱 메커니즘 (generate_final_dataset / get_or_generate_final_dataset)
+# ------------------------------------------------------------
+# 문제: run_final()이 매번 build_dataset()으로 처음부터 다시 생성하면, N=100000 기준
+#      몇 초씩 낭비됨. 그런데 GEN_SEED 등이 고정이라 매번 만들어도 "완전히 동일한" dataset이
+#      나오니, 이미 저장된 파일이 있으면 그냥 그걸 읽는 게 더 낫다.
+# 해결: 저장할 때(save_final_dataset) dataset과 함께 "이번에 쓴 생성 파라미터"를
+#      final_dataset.meta.json에 지문(fingerprint)으로 같이 남긴다. 다음에 get_or_
+#      generate_final_dataset()이 불릴 때, 지금 설정의 지문과 저장된 지문을 비교해서:
+#        - 지문이 같음 -> 파라미터가 하나도 안 바뀌었다는 뜻 -> parquet 파일을 그대로 읽어서 반환
+#        - 지문이 다름(또는 파일이 아예 없음) -> N/시드/subgroup/sophistication 중 뭔가
+#          바뀌었다는 뜻 -> generate_final_dataset()으로 새로 생성해서 덮어씀
+# 한계: 이 지문은 "숫자로 바뀌는 파라미터"만 감지한다. 파생 feature를 여기 새로 연결하는
+#      것처럼, 파라미터 값은 그대로인데 "생성 함수 안의 코드 자체"가 바뀌는 경우는 지문에
+#      안 잡힌다 -> 그럴 때는 DATASET_GEN_VERSION 숫자를 수동으로 올려서 지문을 강제로
+#      바꿔야 재사용되지 않고 새로 생성된다(이것도 못 하면 코드는 바뀌었는데 예전 dataset이
+#      계속 재사용되는 채로 조용히 넘어갈 수 있음).
+# mode="generate"는 이 캐시를 무시하고 generate_final_dataset()을 직접 불러 항상 강제로
+# 새로 만든다(예: 캐시가 있어도 일부러 재현성만 다시 확인하고 싶을 때).
+def _dataset_fingerprint() -> dict:
+    """지금 이 실행의 생성 파라미터 지문. get_or_generate_final_dataset()이 저장된 dataset을
+    재사용해도 되는지 판단하는 기준으로 씀 -> N/GEN_SEED/SUBGROUP_RATIO_KEY/FINAL_SOPHISTICATION
+    중 하나라도 달라지면 값이 달라져서 자동으로 재생성됨."""
+    return {
+        "version": DATASET_GEN_VERSION,
+        "n": N,
+        "gen_seed": GEN_SEED,
+        "subgroup_ratio_key": SUBGROUP_RATIO_KEY,
+        "sophistication": FINAL_SOPHISTICATION,
+    }
+
+
 def save_final_dataset(df, out_dir: Path = _DATASET_DIR) -> None:
     """생성 직후(카테고리 변환/분할 전)의 원본 dataset을 DataSet/ 폴더에 CSV+Parquet 둘 다로 저장.
-    같은 이름으로 덮어씀(재실행 시 항상 최신 dataset만 유지, 버전별 파일 누적 안 함)."""
+    같은 이름으로 덮어씀(재실행 시 항상 최신 dataset만 유지, 버전별 파일 누적 안 함).
+    이번 생성에 쓴 파라미터 지문도 final_dataset.meta.json으로 같이 저장 -> 나중에
+    get_or_generate_final_dataset()이 재사용 가능 여부를 판단하는 데 씀."""
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_dir / "final_dataset.csv", index=False, encoding="utf-8-sig")  # utf-8-sig: Excel에서 한글 깨짐 방지
     df.to_parquet(out_dir / "final_dataset.parquet", index=False)  # dtype(카테고리 등) 그대로 보존
+    with open(out_dir / "final_dataset.meta.json", "w", encoding="utf-8") as f:
+        json.dump(_dataset_fingerprint(), f, ensure_ascii=False, indent=2)
 
 
-def run_final():
-    """최종 모드: 확정한 config 값으로 데이터셋 1개 생성 -> DataSet/ 폴더에 저장
-    -> split_data() 2분할(train/test) -> Track 시나리오(B/C)별로 feature만 다르게 골라 train_model()/evaluate() 반복."""
+def generate_final_dataset():
+    """최종 확정한 config 값으로 dataset 1개를 새로 생성해서 DataSet/ 폴더에 저장하고 반환
+    (기존 저장분이 있어도 무조건 다시 만듦 -> mode="generate"에서 "강제로 새로 만들고 싶을 때" 씀).
+    GEN_SEED/FINAL_SOPHISTICATION/SUBGROUP_RATIO_KEY가 고정이라 몇 번을 다시 돌려도 완전히
+    동일한 dataset이 나옴(재현성 보장). 평소엔 이 함수를 직접 부르기보다
+    get_or_generate_final_dataset()을 쓰는 걸 권장(불필요한 재생성 방지)."""
     df = build_dataset(
         n=N,
         phishing_rate=config.CLASS_IMBALANCE,
@@ -121,7 +170,33 @@ def run_final():
     )
     save_final_dataset(df)  # Detection 쪽 가공(category 변환/분할) 전, 생성 직후의 원본을 저장
     # 파생 feature 13개는 전부 ablation 검증 대기 중이라 여기서는 아직 추가하지 않음
-    # (Detection/derived_features.py의 add_candidate_features() 참고).
+    # (Detection/derived_features.py의 add_candidate_features() 참고). 검증 끝나고 여기에
+    # 연결하게 되면 DATASET_GEN_VERSION을 올려서 기존 캐시를 무효화할 것.
+    return df
+
+
+def get_or_generate_final_dataset():
+    """DataSet/final_dataset.parquet + final_dataset.meta.json이 있고, 그 지문이 지금
+    _dataset_fingerprint()와 완전히 같으면 저장된 dataset을 그대로 읽어서 반환(재생성 생략).
+    하나라도 없거나 지문이 다르면(N/시드/sophistication 변경, 또는 DATASET_GEN_VERSION을
+    수동으로 올린 경우) generate_final_dataset()으로 새로 생성."""
+    parquet_path = _DATASET_DIR / "final_dataset.parquet"
+    meta_path = _DATASET_DIR / "final_dataset.meta.json"
+
+    if parquet_path.exists() and meta_path.exists():
+        with open(meta_path, "r", encoding="utf-8") as f:
+            saved_fingerprint = json.load(f)
+        if saved_fingerprint == _dataset_fingerprint():
+            return pd.read_parquet(parquet_path)
+
+    return generate_final_dataset()
+
+
+def run_final():
+    """최종 모드: get_or_generate_final_dataset()으로 dataset 확보(저장된 게 있고 파라미터가
+    그대로면 재사용, 아니면 새로 생성) -> split_data() 2분할(train/test) -> Track 시나리오(B/C)별로
+    feature만 다르게 골라 train_model()/evaluate() 반복."""
+    df = get_or_generate_final_dataset()
 
     df = prepare_categorical(df)  # train/test로 나뉘기 전에 category dtype 한 번만 확정
 
@@ -228,6 +303,7 @@ def run_ablation_mode():
         n=N,
         phishing_rate=config.CLASS_IMBALANCE,
         subgroup_ratio_key=SUBGROUP_RATIO_KEY,
+        sophistication=FINAL_SOPHISTICATION,  # 실제 최종 dataset과 동일한 조건에서 검증되도록
     )
     if ABLATION_MULTICOLLINEARITY_THRESHOLD is not None:
         kwargs["multicollinearity_threshold"] = ABLATION_MULTICOLLINEARITY_THRESHOLD
@@ -243,7 +319,9 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
     # STRESS_K를 바꿔서 확인할 feature(또는 시나리오)/K를 정함(안 넘기면 그 상수값을 그대로 씀).
     # mode="ablation"은 K-Fold가 아니라 train/test 고정 분할 기반이라 k를 받지 않음 ->
     # 임계값을 바꾸려면 ABLATION_MULTICOLLINEARITY_THRESHOLD/ABLATION_LEAKAGE_THRESHOLD를 수정.
-    if mode == "final":
+    if mode == "generate":
+        result = generate_final_dataset()
+    elif mode == "final":
         result = run_final()
     elif mode == "sen":
         result = run_sensitivity_mode()
@@ -267,12 +345,19 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
     else:
         raise ValueError(f"알 수 없는 mode: {mode}")
 
-    print(result)
+    if mode == "generate":
+        # result가 DataFrame(N=100000행)이라 그대로 print()하면 너무 장황함 -> 요약만 출력.
+        print(f"dataset 생성 완료: shape={result.shape}, 저장 위치={_DATASET_DIR}")
+    else:
+        print(result)
     return result
 
 
 # 실행 방법 (프로젝트 루트에서):
 #   python -X utf8 -m Simulator.main              -> 기본값(mode=final)
+#   python -X utf8 -m Simulator.main -m generate  -> dataset 생성 + DataSet/ 폴더 저장만(학습/평가 없음).
+#                                                     final과 완전히 동일한 GEN_SEED/FINAL_SOPHISTICATION을
+#                                                     쓰므로 나중에 -m final을 돌려도 100% 동일한 dataset이 나옴.
 #   python -X utf8 -m Simulator.main -m final     -> 최종 dataset 생성 -> 학습 -> 평가 (Track B/C)
 #   python -X utf8 -m Simulator.main -m sen       -> SENSITIVITY_PARAMS 전체 + subgroup_ratio_key 스윕
 #                                                     (feature마다 sensitivity_results/<param_name>.json 자동 저장)
@@ -299,7 +384,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Voice Phishing Detection 시뮬레이터 파이프라인 실행")
     parser.add_argument(
         "-m", "--mode", default="final",
-        choices=["final", "sen", "each_sen", "ratio", "stress", "ablation"],
+        choices=["generate", "final", "sen", "each_sen", "ratio", "stress", "ablation"],
         help="실행 모드 (기본값: final)",
     )
     args = parser.parse_args()
