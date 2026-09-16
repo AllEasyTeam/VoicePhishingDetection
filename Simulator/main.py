@@ -16,7 +16,7 @@ GEN_SEED = 42              # build_dataset()용 random_state
 
 # 최종 dataset 생성 시 각 feature에 적용할 sophistication. 민감도 분석(필요 시 K=10/stress 모드
 # 재검증까지 거쳐) 결과로 확정한 값. build_dataset()의 sophistication 인자로 그대로 넘어감
-# (_get_soph()가 dict에서 SOPH_* key를 직접 조회 -> 12개 전부 채워져 있어 "__base__" 폴백은 안 씀).
+# (get_soph()가 dict에서 SOPH_* key를 직접 조회 -> 12개 전부 채워져 있어 "__base__" 폴백은 안 씀).
 FINAL_SOPHISTICATION = {
     # 하나
     config.SOPH_NUMBER_TYPE_BAND: "mid",
@@ -45,8 +45,8 @@ TRACK_SCENARIOS = {
 
 
 # 민감도분석 대상 feature 목록. run_sensitivity()의 param_name으로 그대로 넘어감.
-# config.py의 SOPH_* 상수와 일치해야 함(= normal_generator.py/phishing_generator.py의
-# _get_soph() 조회 key). 하드코딩 문자열 대신 상수를 써서, 오타 시 여기서 바로 NameError로 드러나게 함.
+# config.py의 SOPH_* 상수와 일치해야 함(= generator_utils.get_soph() 조회 key).
+# 하드코딩 문자열 대신 상수를 써서, 오타 시 여기서 바로 NameError로 드러나게 함.
 SENSITIVITY_PARAMS = [
     # 하나
     config.SOPH_NUMBER_TYPE_BAND,

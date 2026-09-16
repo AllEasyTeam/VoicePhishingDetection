@@ -1,11 +1,15 @@
 # 민감도 분석 진행을 위한 파일
+import json
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from contextlib import contextmanager
+
+import numpy as np
+from sklearn.model_selection import StratifiedKFold
+
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.schema_utils import get_feature_columns
 from Simulator.Detection.train_eval import train_model, evaluate, prepare_categorical
-from sklearn.model_selection import StratifiedKFold
 
 # 결과 저장 폴더: 실행 위치(cwd)와 무관하게 항상 프로젝트 루트 기준으로 고정.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -22,8 +26,6 @@ def summarize_fold_results(fold_results: List[dict]) -> dict:
     스칼라가 아닌 건 저장 파일을 깔끔하게 유지하기 위해 요약에서 제외.
     sem(표준오차, std/sqrt(K)): fold를 늘렸을 때(K가 클수록) 평균이 더 정밀해지는 걸
     반영하는 값 -> 후보값 간 차이가 "노이즈보다 큰지" 판단할 땐 std보다 이 값을 기준으로 봐야 함."""
-    import numpy as np
-
     scalar_keys = [
         "threshold", "accuracy", "precision", "recall", "f1",
         "PR-AUC", "Lift@Top5%", "Lift@Top10%", "Lift@Top20%",
@@ -52,8 +54,6 @@ def save_sensitivity_result(
     기존 K=5 결과를 안 건드림.
     meta: stress 모드처럼 결과 해석에 필요한 부가 정보(kind/description/levels 등)가 있을 때만 채워서
     payload에 그대로 얹음. sophistication 기반 run_sensitivity()는 넘기지 않으므로 기존 파일 포맷은 그대로 유지됨."""
-    import json
-
     k = len(summary[0]["fold_results"]) if summary else DEFAULT_K
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -76,7 +76,7 @@ def run_sensitivity(
     param_name: str,                    # 스윕 대상인 feature 이름. config.py 변수명이 아니라 generator의 _get_soph() 조회 key(한글)  ex) "URL_존재확률"
     candidate_values: List[str],        # param_name에 하나씩 대입해볼 값 목록. sweep_target="sophistication"이면 [LOW, MID, HIGH], "subgroup_ratio_key"면 ["A".."E"]
     fixed_config,                       # config.py 모듈. param_name 외 나머지 값은 전부 여기서 그대로(고정) 가져다 씀. Detection/ 안에서 config.py import 하지 않기 위한 parameter.
-    sweep_target: str = "sophistication",  # 무엇을 스윕할지: "sophistication"(_get_soph() 기반 feature) | "subgroup_ratio_key"(RELATION_TYPE_RATIO, A~E)
+    sweep_target: str = "sophistication",  # 무엇을 스윕할지: "sophistication"(get_soph() 기반 feature) | "subgroup_ratio_key"(RELATION_TYPE_RATIO, A~E)
     base_sophistication: Optional[str] = None,  # param_name을 제외한 다른 feature들에 공통 적용할 sophistication. 스윕 대상인 feature 외의 다른 feature들이 LOW/MID/HIGH 중 어떤 값을 쓸지 결정. (보통, MID)
     n: int = 10000,                     # 후보값마다 생성할 사건(row) 개수. 후보값끼리 동일해야 공정 비교 가능
     phishing_rate: Optional[float] = None,  # build_dataset()에 넘길 클래스 불균형 비율(보통 config.CLASS_IMBALANCE)
@@ -97,7 +97,7 @@ def run_sensitivity(
         # dataset 생성을 위한 build_dataset() 호출.
         # candidate_values가 [LOW, MID, HIGH]라면 각각의 sophistication 값에 대해 총 3번의 for문 반복.
         # sophistication에 {param_name: value} + __base__를 넘기면, 스윕 대상만 value,
-        # 나머지 feature는 base_soph(_get_soph의 __base__)로 고정됨.
+        # 나머지 feature는 base_soph(get_soph의 __base__)로 고정됨.
         if sweep_target == "subgroup_ratio_key":
             # RELATION_TYPE_RATIO(A~E) 스윕: sophistication이 아니라 build_dataset()의
             # subgroup_ratio_key 인자 자체가 바뀜. sophistication은 지인/기관 비중과
@@ -111,7 +111,7 @@ def run_sensitivity(
                 sophistication="mid",
             )
         else:
-            # 기존 방식: _get_soph() 조회 key(param_name)에 해당하는 feature의
+            # 기존 방식: get_soph() 조회 key(param_name)에 해당하는 feature의
             # sophistication만 candidate_values로 바꿔가며 스윕.
             df = build_dataset(
                 n,
@@ -191,7 +191,7 @@ def run_stress_sensitivity(
     run_sensitivity()가 sophistication(low/mid/high) 중 어느 게 나은지를 비교하는 것과 달리,
     이건 "순수가정"으로 정한 절대값 자체가 틀렸을 때 성능이 얼마나 흔들리는지를 보는 함수.
     그래서 sophistication은 전부 "mid"로 고정하고, level마다 config 속성(확률 밴드, theta_list 등)만
-    직접 덮어써서 스윕함. _get_soph()는 soph가 dict가 아니면 그대로 통과시키므로("mid" 문자열이면
+    직접 덮어써서 스윕함. get_soph()는 soph가 dict가 아니면 그대로 통과시키므로("mid" 문자열이면
     raw="mid"), 결국 매 level에서 실제로 쓰이는 건 override한 dict의 "mid" key 값 하나뿐임.
     (low/high key는 구조 유지를 위한 참고값으로만 남겨둠).
 
