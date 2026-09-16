@@ -23,7 +23,6 @@ class ValueType(Enum):
     BINARY = "이진"
     CONTINUOUS_TIME = "연속형(시간)" # 분/일 단위
     CONTINUOUS_COUNT = "연속형(개수)" # 명수 등
-    CONTINUOUS_SCORE = "연속형(점수)" # 파생 feature용 위험도 점수 등(시간/개수 단위가 아님)
 
 
 @dataclass

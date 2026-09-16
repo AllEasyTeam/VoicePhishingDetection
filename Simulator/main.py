@@ -5,7 +5,6 @@ from pathlib import Path
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical
-from Simulator.Detection.derived_features import add_derived_features
 from Simulator.Detection.sensitivity_analysis import run_sensitivity, run_stress_sensitivity
 from Simulator.schema import Track
 from Simulator.schema_utils import get_feature_columns
@@ -114,8 +113,9 @@ def run_final():
         config=config,
         sophistication=FINAL_SOPHISTICATION,
     )
-    df = add_derived_features(df)  # 5개 파생 feature 추가 (schema_columns.py에 등록된 컬럼을 채움)
-    save_final_dataset(df)  # 파생 feature 포함, category 변환/분할 전 상태를 최종본으로 저장
+    save_final_dataset(df)  # Detection 쪽 가공(category 변환/분할) 전, 생성 직후의 원본을 저장
+    # 파생 feature 13개는 전부 ablation 검증 대기 중이라 여기서는 아직 추가하지 않음
+    # (Detection/derived_features.py의 add_candidate_features() 참고).
 
     df = prepare_categorical(df)  # train/test로 나뉘기 전에 category dtype 한 번만 확정
 

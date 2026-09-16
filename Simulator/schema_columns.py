@@ -91,25 +91,7 @@ SCHEMA: list[ColumnSchema] = [
     ColumnSchema("is_global", "국제번호 여부", ValueType.BINARY, Track.DEVICE),  # 대표번호 기준
 
     ColumnSchema("is_sequential_callers", "순차복수사칭 여부", ValueType.BINARY, Track.DEVICE),  # 이 사건 안 복수번호 릴레이 여부
-
-    # ------------------------------------------------------------
-    # 파생 feature (Detection/derived_features.py의 add_derived_features()가 계산해서 채움).
-    # Generation이 만드는 원본 컬럼이 아니므로 build_dataset() 직후 별도 호출이 필요함.
-    # track은 계산에 쓴 원본 컬럼 중 가장 제한적인 쪽을 그대로 물려받음(Track B/C 접근 시나리오
-    # 경계가 새어나가지 않도록).
-    # ------------------------------------------------------------
-    ColumnSchema("cross_channel_urgency_score", "다채널 전이 긴급도(문자->통화 간격 기반)",
-                 ValueType.CONTINUOUS_SCORE, Track.DEVICE),  # sms_to_call, sms_to_call_gap 기반
-
-    ColumnSchema("repeat_pressure_intensity", "재연락 압박 강도(재연락 간격 기반)",
-                 ValueType.CONTINUOUS_SCORE, Track.DEVICE),  # has_repeat_contact, repeat_gap 기반
-
-    ColumnSchema("is_malicious_bait_sms", "악성 미끼 문자 식별 여부",
-                 ValueType.BINARY, Track.DEVICE_STRUCTURAL),  # is_url_in_msg, is_reliable_url, has_appinstall_link 기반
-
-    ColumnSchema("cold_contact", "완전 낯선 접촉 여부(미저장+이력 없음)",
-                 ValueType.BINARY, Track.DEVICE),  # in_contacts, has_prior_history 기반
-
-    ColumnSchema("urgency_path", "유인 경로 여부(악성 미끼 문자 -> 통화 연계)",
-                 ValueType.BINARY, Track.DEVICE_STRUCTURAL),  # sms_to_call + is_malicious_bait_sms(C) 기반 -> Track C
 ]
+# 파생 feature 13개는 전부 ablation 검증 대기 중이라 SCHEMA에 등록하지 않음
+# (Detection/derived_features.py의 add_candidate_features() 참고). 검증 후 유의미하다고
+# 확인된 것만 여기 등록해서 get_feature_columns()/실제 학습에 반영할 예정.
