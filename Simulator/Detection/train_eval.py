@@ -1,6 +1,7 @@
 # 분할->학습->평가 모두 한 번에 처리하는 파일.
 import numpy as np
 import xgboost as xgb
+import lightgbm as lgb
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -81,12 +82,15 @@ def lift_at_top_k(y, proba, k=0.05):
     return round(float(lift), 2)
 
 
-def train_model(df, val=None, feature_cols=None):
-    # 학습을 위한 함수. (model : xgboost)
+def train_model(df, val=None, feature_cols=None, hyperparams=None, model_type="XGBoost"):
+    # 학습을 위한 함수. model_type="XGBoost" 또는 "LightGBM".
     # val: 선택적 검증셋(조기종료용). 현재는 main.py/sensitivity_analysis.py 둘 다
     # val 없이 호출함(최종 모드도 train/test 2분할만 씀) -> 아래 val 분기는 지금 호출
     # 경로에서는 안 타지만, 나중에 조기종료가 다시 필요해지면 val을 넘기기만 하면 되도록 남겨둠.
     # feature_cols: 학습에 사용할 feature 컬럼 목록. Track 시나리오별로 다르게 넘어옴. 민감도 분석에서는 전체 feature 사용.
+    # hyperparams: Optuna로 찾은 하이퍼파라미터 dict(optuna_apply.py::run_optuna_tuning()의
+    # "tuned_hyperparams" 참고). 넘기면 아래 기본값 위에 덮어씀(n_estimators/scale_pos_weight
+    # 포함 전부 override 가능). None이면 기존 기본값 그대로 사용(하위 호환).
     feature_cols = _resolve_feature_cols(feature_cols)
     X = df[feature_cols].copy()
     y = df["is_phishing"]
@@ -105,21 +109,41 @@ def train_model(df, val=None, feature_cols=None):
     neg, pos = int((y == 0).sum()), int((y == 1).sum())
     scale_pos_weight = neg / pos if pos > 0 else 1
 
-    model = xgb.XGBClassifier(
-        n_estimators=300,       # 트리 개수. 아래 학습률을 낮춘 만큼 넉넉하게 잡고 조기종료/고정 반복으로 제어.
-        max_depth=4,            # 얕은 트리. 양성 표본이 적어(전체 1%) 트리가 깊으면 소수 양성 사례에 과적합하기 쉬움.
-        learning_rate=0.05,     # 낮은 학습률 -> 한 트리가 과도하게 영향력을 갖지 않도록 완만하게 학습.
-        scale_pos_weight=scale_pos_weight,  # 클래스 불균형 보정(위에서 계산).
-        eval_metric="aucpr",    # PR-AUC. 극단적 불균형에서 accuracy/plain AUC보다 양성 클래스 성능을 잘 반영.
-        tree_method="hist",     # 히스토그램 기반 분할 탐색 + 카테고리 dtype 지원에 필요.
-        enable_categorical=True,  # category dtype 컬럼(number_type 등)을 원-핫 없이 직접 학습.
-        random_state=42,        # 재현성 고정(다른 seed들과 마찬가지로 값 자체보다 고정 여부가 중요).
-    )
+    if model_type == "XGBoost":
+        params = dict(
+            n_estimators=300,       # 트리 개수. 아래 학습률을 낮춘 만큼 넉넉하게 잡고 조기종료/고정 반복으로 제어.
+            max_depth=4,            # 얕은 트리. 양성 표본이 적어(전체 1%) 트리가 깊으면 소수 양성 사례에 과적합하기 쉬움.
+            learning_rate=0.05,     # 낮은 학습률 -> 한 트리가 과도하게 영향력을 갖지 않도록 완만하게 학습.
+            scale_pos_weight=scale_pos_weight,  # 클래스 불균형 보정(위에서 계산). hyperparams가 덮어쓸 수도 있음.
+            eval_metric="aucpr",    # PR-AUC. 극단적 불균형에서 accuracy/plain AUC보다 양성 클래스 성능을 잘 반영.
+            tree_method="hist",     # 히스토그램 기반 분할 탐색 + 카테고리 dtype 지원에 필요.
+            enable_categorical=True,  # category dtype 컬럼(number_type 등)을 원-핫 없이 직접 학습.
+            random_state=42,        # 재현성 고정(다른 seed들과 마찬가지로 값 자체보다 고정 여부가 중요).
+        )
+        if hyperparams:
+            params.update(hyperparams)  # Optuna 튜닝 결과로 기본값 override
+        model = xgb.XGBClassifier(**params)
+    elif model_type == "LightGBM":
+        params = dict(
+            objective="binary",
+            n_estimators=300,
+            max_depth=4,
+            learning_rate=0.05,
+            scale_pos_weight=scale_pos_weight,
+            random_state=42,
+            verbose=-1,          # LightGBM 자체 로그 억제(학습 결과와는 무관)
+            # category dtype 컬럼(number_type 등)은 XGBoost와 달리 별도 플래그 없이
+            # pandas category dtype을 자동 인식함.
+        )
+        if hyperparams:
+            params.update(hyperparams)
+        model = lgb.LGBMClassifier(**params)
+    else:
+        raise ValueError(f"알 수 없는 model_type: {model_type!r}. 'XGBoost' 또는 'LightGBM'이어야 함.")
 
     if val is not None:
         # val이 넘어온 경우(현재 호출 경로에서는 안 씀): 검증셋으로 조기종료 ->
-        # n_estimators=300까지 다 안 돌고 검증 성능이 20라운드 연속 개선 안 되면 멈춤
-        # (과적합 방지, 학습 시간 단축).
+        # 검증 성능이 20라운드 연속 개선 안 되면 멈춤(과적합 방지, 학습 시간 단축).
         # X_val에서 카테고리를 독립적으로 다시 계산하지 않고, X와 완전히 동일한
         # category dtype(코드북)을 그대로 강제 적용 -> val이 prepare_categorical()을
         # 거치지 않았거나 train과 독립적으로 변환돼도 fold 간 카테고리 불일치가 생기지 않음.
@@ -128,8 +152,14 @@ def train_model(df, val=None, feature_cols=None):
             X_val[col] = X_val[col].astype(X[col].dtype)
         y_val = val["is_phishing"]
 
-        model.set_params(early_stopping_rounds=20)
-        model.fit(X, y, eval_set=[(X_val, y_val)], verbose=False)
+        if model_type == "XGBoost":
+            model.set_params(early_stopping_rounds=20)
+            model.fit(X, y, eval_set=[(X_val, y_val)], verbose=False)
+        else:  # LightGBM: set_params(early_stopping_rounds=...) 방식이 아니라 callbacks로 지정
+            model.fit(
+                X, y, eval_set=[(X_val, y_val)],
+                callbacks=[lgb.early_stopping(stopping_rounds=20, verbose=False)],
+            )
     else:
         # 현재 기본 경로(최종 모드/K-Fold 모두): val 없이 n_estimators 고정 학습.
         # max_depth=4/learning_rate=0.05처럼 이미 보수적인 하이퍼파라미터로
