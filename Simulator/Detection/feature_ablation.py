@@ -1,21 +1,29 @@
-# 파생 feature 13개의 선정 파이프라인 (baseline vs full 비교 -> 다중공선성 점검(+데이터 누수
-# 플래그) -> Embedded method(SHAP 참고용) + Permutation Importance 기반 가지치기 -> 최종 재학습).
+# run_feature_selection_pipeline() 내에서 진행되는 파생 feature 13개의 선정 파이프라인.
 #
-# 4단계 구성:
-#   1) baseline(원본 feature만) vs full(원본+파생 13개) 성능 비교. 둘 다 train_set으로 학습,
-#      고정된 test_set으로만 평가.
-#   2) train_set 기준으로만 다중공선성(상관계수) 점검 -> 위배되는 쌍은 타깃과 상관 더 높은
-#      쪽만 남김. 데이터 누수(타깃과의 상관계수)는 "플래그만 하고 자동 제거하지 않음"
-#      (누수처럼 보여도 실제로는 핵심 유효 feature일 수 있어서, 최종 판단은 3단계의
-#      객관적 지표(permutation importance)에 맡김).
-#   3) 2번을 통과한 feature로 학습(Embedded method) -> SHAP는 참고용으로 계산해서 리포트에
-#      남기되, 실제 가지치기 기준은 Permutation Importance <= 0(섞었을 때 성능이 안
-#      떨어지거나 오히려 좋아짐 = 기여가 없다는 뜻)로 객관화. permutation importance는
-#      "학습에 안 쓰인 데이터"에서 계산해야 의미가 있어서, train_set을 다시 한번
-#      train_sub(학습용)/val_sub(permutation 검증용)로 나눔 -> test_set은 이 단계에서
-#      전혀 안 건드림.
-#   4) 3번까지 살아남은 최종 feature set으로 train_set 전체를 다시 학습 -> test_set에서
-#      최종 평가.
+# [0단계: 기본 작업]
+#   1. dataset 생성 (1회)
+#   2. train/test 고정 분할 (1회, 1·4단계가 test_set 재사용)
+#   3. train_set 내부에서 추가 분할 (1회, 3단계 전용)
+#   4. feature 목록 확정 (1회, 1단계에서 바로 사용)
+#
+# [1단계: baseline vs full 비교]
+#   5. 모델 학습 #1 — baseline_model: train_set 전체를 "원본 feature만"(baseline_cols)으로 학습
+#   6. 모델 학습 #2 — full_model: train_set 전체를 "원본+파생 13개 전부"(full_cols)로 학습
+#   7. 둘 다 test_set으로 평가 -> baseline_metrics vs full_metrics 비교표 산출
+#
+# [2단계: 다중공선성 점검 + 데이터 누수 플래그]
+#   8. 다중공선성 점검 및 제거
+#   9. 데이터 누수 플래그
+#
+# [3단계: Embedded method(train_sub) + SHAP(참고) + Permutation Importance(val_sub, 실제 기준)]
+#   10. 모델 학습 #3 — step3_model: train_sub(train_set의 80%)만으로 "원본 + 2단계 생존 feature"를 학습
+#   11. SHAP 계산(참고용)
+#   12. Permutation Importance 계산
+#   13. Permutation Importance ≤ 0인 feature 제거
+#
+# [4단계: 최종 재학습]
+#   14. 모델 학습 #4 — final_model: train_set 전체(70%)를 "원본 + 최종 확정 feature"로 재학습
+#   15. test_set으로 최종 평가 -> 이게 진짜 "이 feature 조합으로 나온 최종 성능"
 #
 # run_sensitivity()/run_stress_sensitivity()가 K-Fold로 "생성 파라미터"를 스윕하는 것과 달리,
 # 이건 dataset 1개를 고정 분할해서 "feature 선정" 자체를 진단하는 용도라 K-Fold를 쓰지 않음.
@@ -35,13 +43,13 @@ from Simulator.Detection.train_eval import train_model, evaluate, prepare_catego
 from Simulator.Detection.derived_features import add_candidate_features
 
 # 결과 저장 폴더: 실행 위치(cwd)와 무관하게 항상 프로젝트 루트 기준으로 고정.
-# sensitivity_results/(생성 파라미터 민감도)와는 성격이 달라서(feature 선정 검증) 별도 폴더로 분리.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _RESULTS_DIR = _PROJECT_ROOT / "feature_selection_results"
 
-# add_candidate_features()가 만드는 13개 컬럼명. get_feature_columns()에는 아직 없으므로
-# 여기서 직접 나열해서 feature_cols 구성에 씀.
-CANDIDATE_FEATURES = [
+# add_candidate_features()가 만드는 13개 파생 컬럼(Derived features)명 목록. 
+# 후보 목록들이라 get_feature_columns()에는 아직 없으므로 직접 나열해서 feature_cols 구성에 씀.
+# 추후, 검증 및 선정이 완료된 feature에 대해 schema에 추가하는 과정 진행.
+CANDIDATE_DERIVED_FEATURES = [
     "cross_channel_urgency_score",
     "repeat_pressure_intensity",
     "is_malicious_bait_sms",
@@ -57,20 +65,28 @@ CANDIDATE_FEATURES = [
     "suspicious_unreg_number_combo",
 ]
 
-DEFAULT_MULTICOLLINEARITY_THRESHOLD = 0.8  # |상관계수|가 이 값을 넘는 파생 feature 쌍 중 하나 제거
-DEFAULT_LEAKAGE_THRESHOLD = 0.95            # 타깃(is_phishing)과의 |상관계수|가 이 값을 넘으면 누수 "의심"(플래그만, 자동 제거 안 함)
-DEFAULT_VAL_SIZE = 0.2                      # train_set 중 permutation importance 검증용으로 떼어둘 비율
-DEFAULT_PERM_N_REPEATS = 10                 # permutation importance 반복 횟수(셔플 때마다 우연 변동 있어서 여러 번 평균)
+DEFAULT_MULTICOLLINEARITY_THRESHOLD = 0.8  # 다중공선성(Multicollinearity) 중복 제거를 위해 사용하는 임계값.
+DEFAULT_LEAKAGE_THRESHOLD = 0.95            # 데이터 누수(Data Leakage) 탐지하기 위해 사용하는 임계값.
+DEFAULT_VAL_SIZE = 0.2                      # train_set 중 permutation importance 검증용으로 사용할 데이터로 분리할 비율
+DEFAULT_PERM_N_REPEATS = 10                 # permutation importance 반복 횟수(우연에 따른 흔들림 줄이기 위해 반복 진행)
 
 
 def _select_by_correlation(train_df, candidate_features, target_col="is_phishing", threshold=0.8):
-    """train set 기준 다중공선성 점검. 후보 feature끼리의 상관계수가 threshold를 넘는 쌍이 있으면,
-    타깃과의 상관계수가 더 높은(=더 예측력 있는) 쪽만 남기고 나머지를 제거(greedy)."""
+    """train set 기준 다중공선성 점검을 진행하는 함수. 
+    후보 파생 feature끼리의 상관계수가 threshold를 넘는 쌍이 있으면,
+    "is_phishing"과의 상관계수가 더 높은(=더 예측력 있는) 쪽만 남기고 나머지를 제거."""
+
+    # corr_with_target : 각 feature와 is_phishing과의 상관계수. (각 feature가 혼자서 얼마나 예측력이 있는지)
     corr_with_target = train_df[candidate_features + [target_col]].corr()[target_col].drop(target_col)
+
+    # 상관계수가 높은 순서대로 정렬 진행. (예측력이 더 좋은 feature를 남기는 게 합리적이기 때문)
     ordered = corr_with_target.abs().sort_values(ascending=False).index.tolist()
 
+    # feature_corr : 파생 feature 후보들끼리의 상관계수 행렬. (feature들끼리 서로 얼마나 겹치는지 = 다중공선성)
     feature_corr = train_df[candidate_features].corr()
 
+    # kept : 다중공선성 점검 후 남은 파생 feature 후보 목록
+    # dropped : 다중공선성 점검으로 제거된 파생 feature 후보 목록
     kept, dropped = [], []
     for feat in ordered:
         conflict = None
@@ -91,10 +107,10 @@ def _select_by_correlation(train_df, candidate_features, target_col="is_phishing
 
 
 def _check_leakage(train_df, candidate_features, target_col="is_phishing", threshold=0.95):
-    """train set 기준 데이터 누수 "의심" 점검. 파생 feature가 타깃과 지나치게(threshold 이상)
-    상관되면 플래그만 함(자동 제거 안 함) -> 누수처럼 보여도 실제로는 핵심 유효 feature일 수
-    있으므로, 최종 판단은 3단계의 permutation importance에 맡김. 결과 리포트에 남겨서
-    사람이 직접 확인할 수 있게만 함."""
+    """train set 기준 데이터 누수 "의심" 점검을 위한 함수. 
+    파생 feature가 타깃과 지나치게(threshold 이상) 상관되면 플래그만 함(자동 제거 안 함) 
+    -> 누수처럼 보여도 실제로는 핵심 유효 feature일 수 있으므로, 최종 판단은 permutation importance를 통해 결정.
+    기록 및 참고용으로 진행."""
     corr = train_df[candidate_features + [target_col]].corr()[target_col].drop(target_col)
     return [
         {"feature": f, "correlation_with_target": round(float(corr[f]), 4)}
@@ -106,10 +122,9 @@ _SHAP_PATCHED = False
 
 
 def _patch_shap_xgboost_base_score_bug():
-    """shap(0.49.1)이 xgboost(3.x)가 base_score를 "[4.9E-1]" 같은 대괄호 벡터 문자열로
-    직렬화하는 걸 못 읽어서 TreeExplainer 생성 시 ValueError가 나는 알려진 호환성 버그를
-    우회. decode_ubjson_buffer()가 반환한 값에서 base_score의 대괄호만 벗겨서 되돌려줌
-    (다른 값/로직은 전혀 건드리지 않음). 모듈 전체에 한 번만 적용."""
+    """SHAP이 xgboost에서 TreeExplainer 생성 시 ValueError가 나는 알려진 호환성 버그를 우회하기 위한 함수. 
+    decode_ubjson_buffer()가 반환한 값에서 base_score의 대괄호만 벗겨서 되돌려줌. 
+    모듈 전체에 한 번만 적용."""
     global _SHAP_PATCHED
     if _SHAP_PATCHED:
         return
@@ -127,8 +142,8 @@ def _patch_shap_xgboost_base_score_bug():
 
 
 def _compute_shap_importance(model, X):
-    """train_sub에서 |SHAP value| 평균(feature별 기여도)을 계산. 참고/리포트용이며,
-    실제 가지치기 기준(permutation importance)과는 별개."""
+    """train_sub에서 |SHAP value| 평균(feature별 기여도)을 계산. 
+    참고/리포트용이며, 실제 가지치기 기준(permutation importance)과는 별개."""
     _patch_shap_xgboost_base_score_bug()
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X)
@@ -140,9 +155,8 @@ def _compute_shap_importance(model, X):
 
 
 def _compute_permutation_importance(model, X_val, y_val, n_repeats=DEFAULT_PERM_N_REPEATS, random_state=42):
-    """val_sub(학습에 안 쓰인 데이터)에서 Permutation Importance 계산. scoring="average_precision"
-    (~PR-AUC)을 씀 -> threshold 선택에 의존하지 않는 지표라, evaluate()의 F1-threshold 탐색
-    로직을 별도로 끌어올 필요 없이 objective하게 비교 가능."""
+    """val_sub(학습에 안 쓰인 데이터)에서 Permutation Importance 계산 진행하는 함수. 
+    scoring="average_precision"(~PR-AUC)을 씀 -> threshold 선택에 의존하지 않는 지표라, evaluate() 로직 없이 판단 가능"""
     result = permutation_importance(
         model, X_val, y_val, scoring="average_precision",
         n_repeats=n_repeats, random_state=random_state,
@@ -152,66 +166,92 @@ def _compute_permutation_importance(model, X_val, y_val, n_repeats=DEFAULT_PERM_
 
 def run_feature_selection_pipeline(
     fixed_config,                       # config.py 모듈. build_dataset()에 그대로 전달.
-    n: int = 100000,
-    phishing_rate: Optional[float] = None,
-    subgroup_ratio_key: str = "D",
-    sophistication="mid",               # feature 선정이 목적이라 sophistication은 고정(기본 mid).
-    gen_seed: int = 42,
+    n: int = 100000,                    # build_dataset()에 그대로 전달.
+    phishing_rate: Optional[float] = None, # build_dataset()에 그대로 전달.
+    subgroup_ratio_key: str = "D",     # build_dataset()에 그대로 전달.
+    sophistication="mid",               # build_dataset()에 전달되어 진행될 땐, FINAL_SOPHISTICATION이 사용됨.
+    gen_seed: int = 42,                 # build_dataset()에 그대로 전달.
     multicollinearity_threshold: float = DEFAULT_MULTICOLLINEARITY_THRESHOLD,
     leakage_threshold: float = DEFAULT_LEAKAGE_THRESHOLD,
     val_size: float = DEFAULT_VAL_SIZE,
     out_dir: Path = _RESULTS_DIR,
 ) -> dict:
-    """4단계 feature 선정 파이프라인 실행."""
+
+    # --- 0단계 : 기본 작업
+    # 1. dataset 생성 (1회) => 원본 23개의 column + 13개의 파생 column인 총 36개의 column으로 만들어진 dataset 생성.
     df = build_dataset(
         n, phishing_rate=phishing_rate, subgroup_ratio_key=subgroup_ratio_key,
         random_state=gen_seed, config=fixed_config, sophistication=sophistication,
-    )
-    df = add_candidate_features(df)
-    df = prepare_categorical(df)
-    train_set, test_set = split_data(df)  # stratify=is_phishing (train_eval.split_data() 참고)
+    ) # 원본 23개의 column으로 구성된 dataset 생성.
+    df = add_candidate_features(df) # 생성한 df에 13개의 후보 파생 column 추가.
+    df = prepare_categorical(df) # category dtype 변경 진행. (데이터 분할 전에 진행해야 함.)
 
-    # permutation importance(3단계)용으로 train_set을 한 번 더 나눔. train_sub은 3단계
-    # 진단용 모델 학습에만 쓰고, val_sub은 그 모델이 한 번도 보지 못한 데이터로 permutation
-    # importance를 계산하는 데만 씀. test_set은 여기서 전혀 관여하지 않음.
+    # 2. train/test 고정 분할
+    train_set, test_set = split_data(df)  # train_set(70%), test_set(30%)로 분할.
+
+    # 3. train_set 내부에서 추가 분할 (permutation importance 계산을 위한 과정)
     train_sub, val_sub = train_test_split(
         train_set, test_size=val_size, random_state=42, stratify=train_set["is_phishing"]
-    )
+    ) # train_set을 train_sub(80%), val_sub(20%)로 분할.
 
+    # 4. feature 목록 확정 
+    # baseline_cols : 원본 column 23개 중 is_feature=True인 21개의 column 목록만 추출
     baseline_cols = get_feature_columns()
-    full_cols = baseline_cols + CANDIDATE_FEATURES
 
-    # --- 1단계: baseline vs full (train_set 전체로 학습, test_set으로만 평가) ---
+    # full_cols : 원본 21개의 column + 13개의 파생 feature => 총 34개의 column 목록
+    full_cols = baseline_cols + CANDIDATE_DERIVED_FEATURES
+
+    # --- 1단계 : baseline vs full 
+    # 5. 모델 학습 #1 — baseline_model: train_set 전체를 "원본 feature만"(baseline_cols)으로 학습
     baseline_model = train_model(train_set, feature_cols=baseline_cols)
     baseline_metrics = evaluate(baseline_model, test_set, feature_cols=baseline_cols, threshold_df=train_set)
 
+    # 6. 모델 학습 #2 — full_model: train_set 전체를 "원본+파생 13개 전부"(full_cols)로 학습
     full_model = train_model(train_set, feature_cols=full_cols)
+
+    # 7. 둘 다 test_set으로 평가 -> baseline_metrics vs full_metrics 비교표 산출 ("기본 feature vs 파생 feature 포함 모델" 성능 차이 확인 가능.)
     full_metrics = evaluate(full_model, test_set, feature_cols=full_cols, threshold_df=train_set)
 
-    # --- 2단계: 다중공선성 점검(제거) + 데이터 누수 점검(플래그만, train_set 전체 기준) ---
+    # --- 2단계 : 다중공선성 점검(제거) + 데이터 누수 점검
+    # 8. 다중공선성 점검 및 제거
+    # kept_after_corr: 다중공선성 점검 후 통과한 파생 feature 목록, dropped_corr: 다중공선성 점검 후 제거된 파생 feature 목록
     kept_after_corr, dropped_corr = _select_by_correlation(
-        train_set, CANDIDATE_FEATURES, threshold=multicollinearity_threshold
+        train_set, CANDIDATE_DERIVED_FEATURES, threshold=multicollinearity_threshold
     )
-    leakage_flags = _check_leakage(train_set, CANDIDATE_FEATURES, threshold=leakage_threshold)
-    step2_survivors = kept_after_corr  # 누수는 플래그만 하고 여기서 빼지 않음(3단계 객관적 지표로 최종 판단)
 
-    # --- 3단계: Embedded method(train_sub) + SHAP(참고용) + Permutation Importance(val_sub, 실제 기준) ---
+    # 9. 데이터 누수 플래그
+    #   (자동 제거 안 함 — 핵심 유효 feature일 수 있어서 최종 판단은 3단계 객관적 지표에 맡김)
+    leakage_flags = _check_leakage(train_set, CANDIDATE_DERIVED_FEATURES, threshold=leakage_threshold)
+
+    # step2_survivors : 8단계에서 다중공선성 점검 진행 후 통과된 feature 목록. (9단계에서 진행한 데이터 누수 플래그는 반영 X, 기록만)
+    step2_survivors = kept_after_corr
+
+    # --- 3단계 : Embedded method + SHAP + Permutation Importance
+    # 10. 모델 학습 #3 — step3_model: train_sub만으로 "원본(baseline_cols) + 2단계 생존 feature(step2_survivors)"를 학습
     step3_cols = baseline_cols + step2_survivors
     step3_model = train_model(train_sub, feature_cols=step3_cols)
 
+    # 11. SHAP 계산(일반화되는지 보장하지 않으므로 참고용으로 사용하여 결과 리포트에만 남김.)
     X_train_sub_step3 = train_sub[step3_cols]
     shap_importance = _compute_shap_importance(step3_model, X_train_sub_step3)
 
+    # 12. Permutation Importance 계산
+    #   (val_sub - 학습에 안 쓰인 처음 보는 데이터 사용하여 계산 진행.)
     X_val_step3 = val_sub[step3_cols]
     y_val_step3 = val_sub["is_phishing"]
     perm_importance = _compute_permutation_importance(step3_model, X_val_step3, y_val_step3)
 
+    # 13. Permutation Importance ≤ 0인 feature 제거
+    #   (섞어도 성능이 안 떨어지거나 오히려 좋아짐 = 기여 없는 feature) -> 여기까지 살아남은 것들이 "최종 확정 feature"(=final_candidates)
     final_candidates = [f for f in step2_survivors if perm_importance.get(f, 0.0) > 0]
     pruned_by_permutation = [f for f in step2_survivors if perm_importance.get(f, 0.0) <= 0]
 
-    # --- 4단계: 최종 feature set으로 train_set 전체를 다시 학습 -> test_set 최종 평가 ---
-    final_cols = baseline_cols + final_candidates
+    # --- 4단계: 최종 feature set으로 train_set 전체를 다시 학습 -> test_set 최종 평가
+    # 14. 모델 학습 #4 — final_model: train_set 전체를 "원본(baseline_cols) + 최종 확정 feature(final_candidates)"로 재학습
+    final_cols = baseline_cols + final_candidates # 원본 21개의 column + 13개의 파생 feature 목록 중 검증에서 통과한 목록
     final_model = train_model(train_set, feature_cols=final_cols)
+
+    # 15. test_set으로 최종 평가 -> 이게 진짜 "이 feature 조합으로 나온 최종 성능"
     final_metrics = evaluate(final_model, test_set, feature_cols=final_cols, threshold_df=train_set)
 
     def _metrics_summary(m):
@@ -221,6 +261,12 @@ def run_feature_selection_pipeline(
     payload = {
         "kind": "feature_selection_pipeline",
         "n": n,
+        # baseline/full/final 세 모델의 test_set 성능을 한곳에 모아둔 요약(별도 계산 없이 비교만 편하게 하려고 추가).
+        "metrics_comparison": {
+            "baseline": _metrics_summary(baseline_metrics),
+            "full": _metrics_summary(full_metrics),
+            "final": _metrics_summary(final_metrics),
+        },
         "step1_baseline_vs_full": {
             "baseline_feature_count": len(baseline_cols),
             "full_feature_count": len(full_cols),
