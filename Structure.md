@@ -67,7 +67,7 @@
 - `save_final_dataset(df, out_dir)`: `DataSet/`에 csv/parquet과 `.meta.json`(지문 포함) 저장.
 - `generate_final_dataset()`: `build_dataset()` 호출해서 새로 dataset 생성.
 - `get_or_generate_final_dataset()`: 저장된 dataset의 지문이 현재와 같으면 재사용, 다르면 `generate_final_dataset()` 재호출(캐싱 로직 본체).
-- `run_final()`: dataset 확보 → `load_tuned_hyperparams()`로 tune 결과 있으면 반영 → `train_model()`/`evaluate()` → 최종 성능 출력.
+- `run_final()`: dataset 확보 → `load_tuned_hyperparams()`로 tune 결과 있으면 반영 → `train_model()`/`evaluate(pr_auc_method="average_precision")` → 최종 성능 출력. Track B/C 모델 비교이므로 `average_precision_score` 사용.
 - `run_sensitivity_mode()`/`run_sensitivity_ratio_mode()`/`run_sensitivity_each_feature_mode()`/`run_stress_mode()`: 각각 `sensitivity_analysis.py`의 `run_sensitivity()`/`run_stress_sensitivity()`를 다른 파라미터 조합으로 호출.
 - `run_ablation_mode()`: `feature_ablation.py::run_feature_selection_pipeline()` 호출
 - `run_ablation_stability_mode()`: `feature_ablation.py::run_stability_check()` 호출(`ABLATION_STABILITY_K`, `ABLATION_STABILITY_FEATURE_SETS` 사용).
@@ -87,7 +87,7 @@
 역할: 실제 Dataset에 필요한 column 목록을 생성하는 파일. 컬럼 추가/수정 시 이 파일만 건드리면 됨.
 
 - `SCHEMA: list[ColumnSchema]`: 실제 컬럼 27개 정의(원본 23개 + 확정 파생 feature 4개, 2026-09-19 기준). `phone_number`/`call_time` 2개만 `is_feature=False`(학습 제외 — phone_number는 통째로 암기 위험, call_time은 hour_bucket과 중복 방지), 나머지 25개(원본 21개 + 파생 4개)가 실제 학습 feature.
-- 파일 하단 주석: `derived_features.py`의 13개 파생 feature 후보는 ablation 검증 대기 중이라 아직 `SCHEMA`에 미등록.
+- 파일 하단 주석: `derived_features.py`의 13개 파생 feature 후보 중 확정 4개는 위 SCHEMA에 등록 완료. 나머지 9개(검증 탈락 또는 대기 중)는 아직 미등록.
 
 ---
 
@@ -166,10 +166,10 @@
 - `prepare_categorical(df)`: 범주형 컬럼을 pandas `category` dtype으로 변환(XGBoost `enable_categorical=True`/LightGBM 네이티브 범주형 처리에 필요).
 - `_resolve_feature_cols(feature_cols)`: `feature_cols`가 없으면 `get_non_feature_columns()` 기준으로 전체 컬럼에서 비-feature만 제외하고 반환(SCHEMA 미등록 파생 feature도 학습에 쓸 수 있게 하기 위함).
 - `split_data(df)`: train/val/test 분할.
-- `pr_auc(y, proba)`: PR-AUC(average_precision) 계산.
+- `pr_auc(y, proba)`: PR-AUC를 `precision_recall_curve()`+`auc()`(사다리꼴 적분)로 계산. `evaluate()`의 기본값(`pr_auc_method="trapezoidal"`)이 이 함수를 씀.
 - `lift_at_top_k(y, proba, k=0.05)`: 상위 k% Lift 계산.
 - `train_model(df, val=None, feature_cols=None, hyperparams=None, model_type="XGBoost")`: `model_type`에 따라 XGBoost/LightGBM 분기 학습. `hyperparams` 전달 시 Optuna tune 결과 반영.
-- `evaluate(model, df, feature_cols=None, threshold_df=None)`: 학습된 모델을 평가. `threshold_df`를 별도로 받아 "임계값 결정에 test_set을 쓰지 않는" 낙관 편향 방지 구조.
+- `evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="trapezoidal")`: 학습된 모델을 평가. `threshold_df`를 별도로 받아 "임계값 결정에 test_set을 쓰지 않는" 낙관 편향 방지 구조. `pr_auc_method`(2026-09-19 추가)는 `"trapezoidal"`(기본, `pr_auc()`)과 `"average_precision"`(`average_precision_score()`, 직선 보간 편향이 없어 모델/조합 비교에 더 적합) 중 선택 — `sensitivity_analysis.py`는 기본값(사다리꼴, 상대적 우열 비교 목적)을 그대로 쓰고, `feature_ablation.py`와 `main.py::run_final()`은 `"average_precision"`을 명시적으로 넘김(아래 각 섹션 참고).
 
 **이 파일은 `Generation/config.py`를 import하지 않아야 함.** 
 
@@ -205,19 +205,19 @@
 - `run_stability_check()`: 위에서 "이미 결정된" 최종 feature 조합의 성능 차이가 실제 효과인지 단일 실행의 우연(노이즈)인지 확인하는 사후 검증. "무엇을 고를지"를 다시 정하는 게 아니므로 `run_sensitivity()`와 동일한 StratifiedKFold(K-Fold) 방식을 써도 선정 과정의 1회 고정 분할 원칙과 모순되지 않음.
 
 선언된 함수/상수:
-- `CANDIDATE_DERIVED_FEATURES`: `derived_features.py`가 만드는 13개 후보 이름 목록.
-- `FINAL_CANDIDATE_FEATURES`: `run_feature_selection_pipeline()` 실행(2026-09-19, N=100,000) 결과로 확정된 최종 4개(아래 표 참고). `run_stability_check()`의 기본 검증 대상.
+- `CANDIDATE_DERIVED_FEATURES`: `derived_features.py`가 만드는 13개 후보 중 아직 SCHEMA 미등록인 9개(확정 4개 제외) 이름 목록. `run_stability_check()` 기본 검증 대상이기도 함.
+- `FINAL_CANDIDATE_FEATURES`: `run_feature_selection_pipeline()` 실행(2026-09-19, N=100,000) 결과로 확정된 최종 4개(아래 표 참고, 참고용 상수 — SCHEMA에 이미 등록되어 `baseline_cols`에 포함되므로 더 이상 후보로 넣으면 안 됨).
 - `DEFAULT_MULTICOLLINEARITY_THRESHOLD=0.8`/`DEFAULT_LEAKAGE_THRESHOLD=0.95`/`DEFAULT_VAL_SIZE=0.2`/`DEFAULT_PERM_N_REPEATS=10`: 선정 파이프라인 각 단계 기본 임계값·비율.
 - `DEFAULT_STABILITY_K=10`: `run_stability_check()` 기본 K(민감도분석 기본값 5보다 크게 잡음 — 재검증 성격이라).
-- `_metrics_summary(m)`: `evaluate()` 결과에서 threshold/accuracy/precision/recall/f1/PR-AUC/Lift@Top5~20%만 추려 요약(두 함수가 공유).
+- `_metrics_summary(m)`: `evaluate()` 결과에서 threshold/accuracy/precision/recall/f1/PR-AUC/Lift@Top5~20%만 추려 요약(두 함수가 공유). 두 함수 모두 `evaluate()` 호출 시 `pr_auc_method="average_precision"`을 명시함(baseline/full/final, baseline/조합끼리 서로 비교하는 목적이라 — `train_eval.py` 섹션 참고).
 - `_select_by_correlation(train_df, candidate_features, target_col, threshold)`: 2단계 다중공선성 제거(후보끼리 상관계수 threshold 초과 쌍 중 하나 drop).
 - `_check_leakage(train_df, candidate_features, target_col, threshold)`: 2단계 데이터 누수 플래그(후보-target 상관계수만 검사, 자동 제거는 안 함).
 - `_patch_shap_xgboost_base_score_bug()`: shap/xgboost 3.x `base_score` 문자열 파싱 버그 몽키패치.
 - `_compute_shap_importance(model, X)`: 3단계 SHAP 중요도 계산(참고용).
-- `_compute_permutation_importance(model, X_val, y_val, n_repeats, random_state)`: 3단계 Permutation Importance 계산(실제 가지치기 기준, `train_sub`/`val_sub` 분리해서 held-out 데이터로 검증).
+- `_compute_permutation_importance(model, X_val, y_val, n_repeats, random_state)`: 3단계 Permutation Importance 계산(실제 가지치기 기준, `train_sub`/`val_sub` 분리해서 held-out 데이터로 검증). `scoring="average_precision"`을 처음부터 써서, 오늘 `evaluate()`의 `pr_auc_method` 추가와 무관하게 선정 기준 자체는 계속 동일했음.
 - `run_feature_selection_pipeline(...)`: 위 helper들을 묶어 0~4단계 전체를 실행하는 선정 메인 함수.
 - `_diff_summary(baseline_summary, combo_summary)`: `run_stability_check()`의 baseline/조합별 summary에서 지표별 평균(mean) 차이만 뽑아 요약(양수=해당 조합이 평균적으로 더 좋음).
-- `run_stability_check(fixed_config, feature_sets=None, k=10, ...)`: dataset 1개만 생성 → `StratifiedKFold`로 K개 fold 분할 → baseline(21개) 모델과, `feature_sets`(`{조합명: [파생 feature 목록]}`, 기본값은 `{"final": FINAL_CANDIDATE_FEATURES}`)에 담긴 조합별 모델들을 **같은 fold** 안에서 함께 반복 학습·평가 → `sensitivity_analysis.summarize_fold_results()`로 조합별 mean/std/sem 집계 → `_diff_summary()`로 baseline 대비 차이 요약. 조합을 여러 개 동시에 넣으면(예: 4개 전체 묶음 vs 신호가 강한 2개 vs 약한 2개) 한 번의 실행으로 모두 비교 가능.
+- `run_stability_check(fixed_config, feature_sets=None, k=10, ...)`: dataset 1개만 생성 → `StratifiedKFold`로 K개 fold 분할 → baseline(25개, 확정 4개 포함) 모델과, `feature_sets`(`{조합명: [파생 feature 목록]}`, 기본값은 `{"remaining_candidates": CANDIDATE_DERIVED_FEATURES}`)에 담긴 조합별 모델들을 **같은 fold** 안에서 함께 반복 학습·평가 → `sensitivity_analysis.summarize_fold_results()`로 조합별 mean/std/sem 집계 → `_diff_summary()`로 baseline 대비 차이 요약. `feature_sets`에 넣는 feature가 `baseline_cols`와 겹치면 `ValueError`(컬럼 중복 방지, 2026-09-19 추가).
 
 선정 파이프라인(`run_feature_selection_pipeline()`) 흐름:
 - 0단계 : 기본 작업
@@ -280,6 +280,15 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
   - `run_stability_check()`에 `feature_sets`의 각 조합이 `baseline_cols`와 겹치면 명확한 `ValueError`를 내는 방어 로직 추가.
   - `run_stability_check()` 기본값을 `{"remaining_candidates": CANDIDATE_DERIVED_FEATURES}`(아직 SCHEMA 미등록인 9개 묶음)로 변경.
   - `main.py::ABLATION_STABILITY_FEATURE_SETS`도 동일하게 `{"remaining_candidates": CANDIDATE_DERIVED_FEATURES}`로 교체(9개 중 일부가 단일 실행의 우연 때문에 탈락한 건 아닌지 재검증하는 용도로 의미 변경).
+
+#### PR-AUC 계산 방식 분리 및 재검증 (2026-09-19)
+
+
+- `evaluate(pr_auc_method="average_precision")`을 `feature_ablation.py`(baseline/full/final, baseline/조합 비교 전부)와 `main.py::run_final()`(Track B/C 비교)에 명시 — 직선 보간 편향이 없는 `average_precision_score`가 모델 간 비교에 더 적합하다는 판단.
+- `optuna_apply.py`는 애초에 `train_eval.py`를 쓰지 않고 독립적으로 `average_precision_score`를 써서 변경 불필요.
+
+**중요**: feature 선정을 실제로 결정하는 `_compute_permutation_importance()`는 처음부터 `scoring="average_precision"`을 내부적으로 써 왔기 때문에, 이번 `pr_auc_method` 정리는 "어떤 파생 feature가 최종 선정되는가"라는 핵심 결정에는 영향을 주지 않음 — 영향을 받는 건 `metrics_comparison`/`step1`/`step4`/K=10 재검증 표에 **보고용으로 찍히는 PR-AUC 숫자**뿐. 
+이 정리 직후 `-m ablation`을 다시 실행해서 직접 확인함: 이미 탈락했던 후보들이 더 강해진 baseline 대비로도 여전히 기여가 없음을 재확인한 것이라, **4개 확정 결정은 그대로 유지**.
 
 ---
 

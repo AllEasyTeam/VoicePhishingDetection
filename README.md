@@ -143,6 +143,8 @@ N=100,000, Track별 최종 평가(test_set 기준):
 
 확정된 4개는 이제 `schema_columns.py`의 SCHEMA에 등록되어 production feature(총 25개)에 포함됐다. 그래서 `feature_ablation.py`의 후보 pool(`CANDIDATE_DERIVED_FEATURES`)도 13개에서, 검증에 탈락했거나 아직 미확정인 나머지 9개로 줄었다 — 이후 `-m ablation`을 다시 돌리면 이 4개는 이미 baseline에 포함된 채로, 남은 9개(또는 새로 추가하는 아이디어)만 후보로 검증하게 된다.
 
+실제로 SCHEMA 반영 이후 이 9개를 25개짜리(4개 포함) baseline 대비로 다시 검증해봤는데, 다중공선성 제거 후 남은 7개 전부 permutation importance ≤0으로 다시 탈락했다(`final_candidate_features: []`) — 이미 탈락했던 후보들이 더 강해진 baseline에서도 여전히 기여가 없다는 뜻이라, 4개 확정 결정을 다시 한번 뒷받침한다.
+
 ### 민감도 분석 (`-m sen` / `-m each_sen` / `-m ratio` / `-m stress`)
 
 **방식**: 근거가 약해 low/mid/high 3단계로 관리하는 feature 12개를 하나씩, 나머지는 "mid"로 고정한 채 값만 바꿔가며 K-Fold(기본 K=5)로 학습·평가해 어느 단계가 나은지 비교한다(`sen`/`each_sen`). 지인:기관 하위집단 비중(A–E)도 같은 방식으로 별도 비교한다(`ratio`). 결과가 애매하면 K=10으로 재검증하고, 근거가 특히 약한 feature는 sophistication이 아니라 확률/θ **절대값 자체**를 낮음부터 극단까지 흔들어보는 stress 모드로 한 번 더 검증한다.
@@ -166,6 +168,7 @@ N=100,000, Track별 최종 평가(test_set 기준):
 - **sophistication 3단계 체계**: 근거가 불확실한 feature 값은 확정값 하나로 못 박지 않고 low/mid/high 3단계로 나눠 관리한다. 최종값 확정 전에는 민감도분석(`sen`/`each_sen`)으로 세 단계 간 성능 차이를 비교해 어느 수준이 타당한지 확인하고, 애매한 결과는 K=10으로 재검증한 뒤 확정한다.
 - **값의 근거 수준 표기**: `config.py`의 각 확률/θ 값에는 그 값이 어디서 왔는지(실측 θ값·판결문 집계 n·마스터표 서술 근거·근거 없어 무정보사전확률 등)를 주석으로 함께 남긴다. 근거가 약한 값일수록 stress 모드로 절대값 자체가 틀렸을 때의 성능 흔들림을 별도로 검증한다.
 - **클래스 불균형 반영**: 실제 보이스피싱 발생률에 맞춰 전체의 약 1%만 피싱으로 생성하고, `scale_pos_weight`로 학습 시 양성 오분류에 더 큰 패널티를 준다. accuracy 대신 PR-AUC/Lift@Top-K%를 주요 지표로 사용.
+- **목적에 따라 다른 PR-AUC 계산 방식 사용**: `precision_recall_curve()`+`auc()`(사다리꼴 적분)는 PR 곡선을 직선으로 보간해서 값이 과장될 수 있다는 게 알려진 한계라, 모델/조합끼리 비교하는 곳(파생 feature 검증, Track B/C 최종 비교, Optuna 모델 비교)은 보간 편향이 없는 `average_precision_score()`를 쓰고, 같은 feature의 sophistication 단계 간 상대적 우열만 비교하면 되는 민감도분석은 기존 사다리꼴 방식을 그대로 쓴다(`Detection/train_eval.py::evaluate(pr_auc_method=...)`).
 - **결측치는 구조적 게이트로만 발생**: 예를 들어 "사건 내 반복 접촉이 없으면 재연락 간격은 결측"처럼, 결측은 항상 선행 조건에 의해 명시적으로 발생하며 `schema.py`의 `depends_on`에 그 규칙을 텍스트로 남긴다. 근거 없는 임의 결측은 없다.
 - **낙관 편향 방지**: 판정 threshold는 항상 train_set에서만 결정하고 test_set에는 고정 적용만 한다. feature 선정 단계의 3단계(Embedded/Permutation Importance)도 train_set 내부의 별도 val_sub로만 계산해 test_set을 건드리지 않는다.
 - **재현성 vs 실행 간 흔들림의 구분**: 같은 코드·같은 설정이라도 XGBoost의 멀티스레드 히스토그램 학습 특성상 완전히 새 프로세스로 실행하면 결과가 미세하게 달라질 수 있음을 직접 확인했다. 그래서 permutation importance가 0에 가까운 경계선 feature는 단일 실행 결과만으로 판단하지 않고, 같은 fold로 baseline과 반복 비교하는 안정성 재검증(`run_stability_check`) 단계를 별도로 거친다.
