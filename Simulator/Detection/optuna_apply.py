@@ -4,7 +4,9 @@
 import optuna
 
 # 하이퍼파라미터 중요도 분석
-import optuna.importance
+import optuna.importance 
+import optuna.visualization as vis
+from optuna.importance import FanovaImportanceEvaluator
 import xgboost as xgb
 import lightgbm as lgb
 from sklearn.metrics import average_precision_score
@@ -166,7 +168,8 @@ def run_optuna_tuning(X_train, y_train, X_val, y_val, model_type="XGBoost", n_tr
     # fANOVA를 통해, 하이퍼파리미터 중요도 확인. 
     # trial 수가 너무 적거나 특정 하이퍼파라미터가 한 값으로 고정되면 계산 실패할 수 있기에 방어적으로 처리
     try:
-        raw_importance = optuna.importance.get_param_importances(study)
+        evaluator = optuna.importance.FanovaImportanceEvaluator(seed=42)
+        raw_importance = optuna.importance.get_param_importances(study, evaluator=evaluator)
         hyperparameter_importance_ranked = [
             {
                 "rank": i + 1,
@@ -188,6 +191,7 @@ def run_optuna_tuning(X_train, y_train, X_val, y_val, model_type="XGBoost", n_tr
         "hyperparameter_importance_ranked(val PR-AUC 기준, fANOVA, 순위·비율순)": hyperparameter_importance_ranked,
         "n_trials": n_trials,
         "base_scale_pos_weight(참고용, 실제 데이터 neg/pos 비율)": base_scale,
+        "study" : study, # 시각화 및 등고선 분석을 위함
     }
 
 
@@ -214,7 +218,7 @@ def run_optuna_tuning_and_compare(X_train, y_train, X_val, y_val, n_trials=50, r
             "diff(LightGBM - XGBoost)": round(lgb_pr_auc - xgb_pr_auc, 4),
             "higher": "XGBoost" if xgb_pr_auc >= lgb_pr_auc else "LightGBM",
         },
-        "Lift@Top5%": {
+        "Lift@Top1%": {
             "XGBoost": xgb_lift,
             "LightGBM": lgb_lift,
             "diff(LightGBM - XGBoost)": round(lgb_lift - xgb_lift, 4),
@@ -228,8 +232,55 @@ def run_optuna_tuning_and_compare(X_train, y_train, X_val, y_val, n_trials=50, r
         },
     }
 
+    
+    # 1. 튜닝 결과에서 승자 모델(또는 분석하고 싶은 모델)의 study 객체 추출
+    # 일단 주석 -> 계속 나오니깐 확실해지면 풀기(보고서에 작성하기 위함)
+    models_to_visualize = [
+        ("XGBoost", xgb_result),
+        ("LightGBM", lgb_result),
+    ]
+
+    for model_name, res in models_to_visualize:
+        try:
+            target_study = res.get("study")
+            if target_study is None:
+                continue
+
+            # 난수고정
+            evaluator = optuna.importance.FanovaImportanceEvaluator(seed=42)
+
+            # 1. fANOVA 기반 하이퍼파라미터 중요도 막대그래프
+            fig_imp = vis.plot_param_importances(target_study, evaluator=evaluator)
+            fig_imp.update_layout(title=f"[{model_name}] Hyperparameter Importances (fANOVA)")
+            fig_imp.show()
+
+            # 2. 파라미터 값 변화에 따른 PR-AUC 분포 (Slice Plot)
+            fig_slice = vis.plot_slice(target_study)
+            fig_slice.update_layout(title=f"[{model_name}] Slice Plot (PR-AUC vs Params)")
+            fig_slice.show()
+
+            # 3. 모델별 핵심 규제 파라미터 등고선 (Contour Plot)
+            # XGBoost: max_depth, LightGBM: num_leaves (각 모델의 핵심 복잡도 변수 반영)
+            contour_params = (
+                ["colsample_bytree", "max_depth"]
+                if model_name == "XGBoost"
+                else ["colsample_bytree", "num_leaves"]
+            )
+            fig_contour = vis.plot_contour(target_study, params=contour_params)
+            fig_contour.update_layout(title=f"[{model_name}] Contour Plot ({contour_params[0]} vs {contour_params[1]})")
+            fig_contour.show()
+
+        except Exception as e:
+            print(f"[{model_name}] 시각화 출력 중 오류 발생 (무시하고 진행): {e}")
+
+    # 시각화 완료 후 JSON 저장을 위해 Study 객체 제거
+    xgb_result.pop("study", None)
+    lgb_result.pop("study", None)
+
+
     return {
-        "winner": winner,
+    #    "winner": winner,
+    # pr-auc뿐만이 아니라 전체적으로 판단할 것이기에
         "comparison": comparison,
         "XGBoost": xgb_result,
         "LightGBM": lgb_result,
