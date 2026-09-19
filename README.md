@@ -134,7 +134,7 @@ N=100,000, Track별 최종 평가(test_set 기준):
 
 | column명 | 정의 | Track |
 |---|---|---|
-| `structural_phishing_score` | 문자 구조적 위협 누적 지수(0~5점) | 단말+구조적신호(C) |
+| `structural_phishing_score` | 문자 구조적 위협 누적 지수(0–5점) | 단말+구조적신호(C) |
 | `is_sms_initiated_unreg` | 미등록 발신자의 문자 개시 여부 | 단말(B) |
 | `cold_contact` | 완전 낯선 접촉 여부(미저장+이력 없음) | 단말(B) |
 | `repeat_pressure_intensity` | 재연락 압박 강도(재연락 간격 기반 연속 점수) | 단말(B) |
@@ -145,16 +145,16 @@ N=100,000, Track별 최종 평가(test_set 기준):
 
 ### 민감도 분석 (`-m sen` / `-m each_sen` / `-m ratio` / `-m stress`)
 
-**방식**: 근거가 약해 low/mid/high 3단계로 관리하는 feature 12개를 하나씩, 나머지는 "mid"로 고정한 채 값만 바꿔가며 K-Fold(기본 K=5)로 학습·평가해 어느 단계가 나은지 비교한다(`sen`/`each_sen`). 지인:기관 하위집단 비중(A~E)도 같은 방식으로 별도 비교한다(`ratio`). 결과가 애매하면 K=10으로 재검증하고, 근거가 특히 약한 feature는 sophistication이 아니라 확률/θ **절대값 자체**를 낮음~극단까지 흔들어보는 stress 모드로 한 번 더 검증한다.
+**방식**: 근거가 약해 low/mid/high 3단계로 관리하는 feature 12개를 하나씩, 나머지는 "mid"로 고정한 채 값만 바꿔가며 K-Fold(기본 K=5)로 학습·평가해 어느 단계가 나은지 비교한다(`sen`/`each_sen`). 지인:기관 하위집단 비중(A–E)도 같은 방식으로 별도 비교한다(`ratio`). 결과가 애매하면 K=10으로 재검증하고, 근거가 특히 약한 feature는 sophistication이 아니라 확률/θ **절대값 자체**를 낮음부터 극단까지 흔들어보는 stress 모드로 한 번 더 검증한다.
 
 **결과 예시**:
 
 | 검증 대상 | 결과 | 확정 |
 |---|---|---|
 | `repeat_gap` sophistication (K=10) | low(f1=0.9549) > mid(0.9521) > high(0.9466) — low가 뚜렷하게 우수 | **low** |
-| `sms_to_call_gap` sophistication (K=10) | low/mid/high f1 0.9550~0.9573로 사실상 무차이(노이즈 범위) | **mid**(중간값으로 안전하게 채택) |
-| 지인:기관 비중 A~E | D가 PR-AUC=0.9776로 최상위, f1(0.9576)도 상위권(E가 f1=0.9589로 근소하게 더 높지만 PR-AUC는 D가 더 높음) | **B → D로 변경** |
-| `url_rate` stress 검증 | 확률을 very_low~extreme까지 흔들어도 f1 0.949~0.962, PR-AUC 0.975~0.989 범위 — 급격한 성능 붕괴 없음 | mid 가정이 다소 어긋나도 안전함을 확인 |
+| `sms_to_call_gap` sophistication (K=10) | low/mid/high f1 0.9550–0.9573로 사실상 무차이(노이즈 범위) | **mid**(중간값으로 안전하게 채택) |
+| 지인:기관 비중 A–E | D가 PR-AUC=0.9776로 최상위, f1(0.9576)도 상위권(E가 f1=0.9589로 근소하게 더 높지만 PR-AUC는 D가 더 높음) | **B → D로 변경** |
+| `url_rate` stress 검증 | 확률을 very_low부터 extreme까지 흔들어도 f1 0.949–0.962, PR-AUC 0.975–0.989 범위 — 급격한 성능 붕괴 없음 | mid 가정이 다소 어긋나도 안전함을 확인 |
 
 전체 스윕 결과는 전부 `sensitivity_results/*.json`에 저장되며, 상세 방법과 최종 확정값 전체 목록은 `Simulator/main.py`의 `FINAL_SOPHISTICATION`과 [Structure.md](Structure.md)에서 확인할 수 있다.
 
