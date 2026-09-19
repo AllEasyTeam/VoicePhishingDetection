@@ -70,7 +70,7 @@
 - `run_final()`: dataset 확보 → `load_tuned_hyperparams()`로 tune 결과 있으면 반영 → `train_model()`/`evaluate()` → 최종 성능 출력.
 - `run_sensitivity_mode()`/`run_sensitivity_ratio_mode()`/`run_sensitivity_each_feature_mode()`/`run_stress_mode()`: 각각 `sensitivity_analysis.py`의 `run_sensitivity()`/`run_stress_sensitivity()`를 다른 파라미터 조합으로 호출.
 - `run_ablation_mode()`: `feature_ablation.py::run_feature_selection_pipeline()` 호출
-- `run_ablation_stability_mode()`: `feature_ablation.py::run_stability_check()` 호출(`ABLATION_STABILITY_K`, `feature_ablation.FINAL_CANDIDATE_FEATURES` 사용).
+- `run_ablation_stability_mode()`: `feature_ablation.py::run_stability_check()` 호출(`ABLATION_STABILITY_K`, `ABLATION_STABILITY_FEATURE_SETS` 사용).
 - `load_tuned_hyperparams(out_dir)`: `optuna_results/best_params.json`이 있으면 읽어서 `(model_type, hyperparams)` 반환, 없으면 `(None, None)`.
 - `run_tuning_mode()`: `optuna_apply.py::run_optuna_tuning_and_compare()` 호출 후 결과 저장.
 
@@ -216,8 +216,8 @@
 - `_compute_shap_importance(model, X)`: 3단계 SHAP 중요도 계산(참고용).
 - `_compute_permutation_importance(model, X_val, y_val, n_repeats, random_state)`: 3단계 Permutation Importance 계산(실제 가지치기 기준, `train_sub`/`val_sub` 분리해서 held-out 데이터로 검증).
 - `run_feature_selection_pipeline(...)`: 위 helper들을 묶어 0~4단계 전체를 실행하는 선정 메인 함수.
-- `_diff_summary(baseline_summary, final_summary)`: `run_stability_check()`의 baseline/final summary에서 지표별 평균(mean) 차이만 뽑아 요약(양수=final이 평균적으로 더 좋음).
-- `run_stability_check(fixed_config, final_candidate_features=None, k=10, ...)`: dataset 1개만 생성 → `StratifiedKFold`로 K개 fold 분할 → baseline(21개)/final(21+최종후보) 두 모델을 fold마다 반복 학습·평가 → `sensitivity_analysis.summarize_fold_results()`로 mean/std/sem 집계 → `_diff_summary()`로 차이 요약.
+- `_diff_summary(baseline_summary, combo_summary)`: `run_stability_check()`의 baseline/조합별 summary에서 지표별 평균(mean) 차이만 뽑아 요약(양수=해당 조합이 평균적으로 더 좋음).
+- `run_stability_check(fixed_config, feature_sets=None, k=10, ...)`: dataset 1개만 생성 → `StratifiedKFold`로 K개 fold 분할 → baseline(21개) 모델과, `feature_sets`(`{조합명: [파생 feature 목록]}`, 기본값은 `{"final": FINAL_CANDIDATE_FEATURES}`)에 담긴 조합별 모델들을 **같은 fold** 안에서 함께 반복 학습·평가 → `sensitivity_analysis.summarize_fold_results()`로 조합별 mean/std/sem 집계 → `_diff_summary()`로 baseline 대비 차이 요약. 조합을 여러 개 동시에 넣으면(예: 4개 전체 묶음 vs 신호가 강한 2개 vs 약한 2개) 한 번의 실행으로 모두 비교 가능.
 
 선정 파이프라인(`run_feature_selection_pipeline()`) 흐름:
 - 0단계 : 기본 작업
@@ -251,6 +251,24 @@
 
 **최종 결정**: `unreg_sender_with_url`/`suspicious_unreg_number_combo`는 노이즈 수준으로 판단해 제외하고, 위 표의 **4개를 최종 확정 목록으로 유지**함. `run_stability_check()`(`-m ablation_stability`)까지 돌리지 않고도, 반복 재실행 자체로 이미 "무엇이 안정적인 신호인지"가 충분히 드러났다고 판단.
 
+#### `run_stability_check()` K=10 재검증 결과 (2026-09-19, N=100,000, `-m ablation_stability`)
+
+baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 비교. threshold/accuracy 제외, diff는 "final − baseline"(mean 기준):
+
+| 지표 | baseline mean(sem) | final mean(sem) | diff | 판정 |
+|---|---|---|---|---|
+| precision | 0.9809(0.0041) | 0.9839(0.0043) | +0.0030 | 노이즈 범위 |
+| recall | 0.9718(0.0053) | 0.9728(0.0061) | +0.0010 | 노이즈 범위 |
+| f1 | 0.9762(0.0032) | 0.9782(0.0038) | +0.0020 | 노이즈 범위 |
+| PR-AUC | 0.9906(0.0028) | 0.9897(0.0029) | −0.0009 | 노이즈 범위 |
+| Lift@Top5% | 19.899(0.0592) | 19.859(0.0577) | −0.040 | 노이즈 범위 |
+| Lift@Top10% | 9.970(0.0202) | 9.960(0.0210) | −0.010 | 노이즈 범위 |
+| Lift@Top20% | 4.990(0.0095) | 4.990(0.0095) | 0.000 | 차이 없음 |
+
+전 지표에서 diff가 baseline/final 결합 표준오차(√(sem²+sem²))보다 작음 → **통계적으로 baseline과 구별 안 됨**. 지난 단일 실행에서 관찰됐던 PR-AUC/Lift@Top5% 하락은 실제 효과가 아니라 XGBoost 프로세스 간 비결정성 노이즈의 한 표본이었음이 이 재검증으로 확인됨. 4개 유지 결정을 뒷받침하는 근거.
+
+**참고**: `run_stability_check()`는 이후 `feature_sets` 인자로 여러 조합(예: `ABLATION_STABILITY_FEATURE_SETS`의 `all4`/`strong_pair`/`cold_contact`+`structural_phishing_score`/`weak_pair`=`is_sms_initiated_unreg`+`repeat_pressure_intensity`)을 한 번에 비교할 수 있도록 확장됨 — 4개 중 어떤 feature가 실제 효과를 내는지 더 세분화해서 보고 싶을 때 사용(아직 이 세분화 버전은 실행 전).
+
 **검증 -> 실제 파이프라인에 반영하는 방법**:
 - 검증 진행 후에는 `schema_columns.py`의 `SCHEMA`에 미등록된 상태 -> 직접 등록하는 과정이 필요함.
 - 실제 반영하려면: ① SCHEMA에 위 4개 `ColumnSchema` 등록 → ② `generate_final_dataset()`에 파생 feature 계산 연결 → ③ `main.py::DATASET_GEN_VERSION`을 1→2로 올려서 캐시 무효화 → ④ `-m generate`(또는 `-m final`) 재실행
@@ -283,7 +301,7 @@
 | `DataSet/` | 최종 dataset(`final_dataset.csv`/`.parquet`/`.meta.json`). `-m generate`/`-m final` 실행 시 생성. | 추적됨(커밋 대상) |
 | `sensitivity_results/` | 민감도분석 모드(`sen`/`each_sen`/`ratio`/`stress`) 결과 json. | `.gitignore` 처리(재실행하면 다시 생성되므로 커밋 대상 아님) |
 | `feature_selection_results/` | ablation 모드 결과 json(`feature_selection_pipeline.json`). | `.gitignore` 처리 |
-| `feature_stability_results/` | ablation_stability 모드 결과 json(`feature_stability_check.json` — baseline/final summary + diff). `feature_selection_results/`와 성격이 달라 별도 폴더로 분리. | `.gitignore` 처리 |
+| `feature_stability_results/` | ablation_stability 모드 결과 json(`feature_stability_check.json` — baseline summary + 조합별(`combos`) summary/diff). `feature_selection_results/`와 성격이 달라 별도 폴더로 분리. | `.gitignore` 처리 |
 | `optuna_results/` | tune 모드 결과 json(`best_params.json` — winner 모델+하이퍼파라미터). | `.gitignore` 처리 |
 
 ---

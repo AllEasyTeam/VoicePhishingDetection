@@ -113,6 +113,17 @@ ABLATION_LEAKAGE_THRESHOLD = None
 # 민감도분석 기본값(5)이 아니라 재검증 관례(K=10)를 따름.
 ABLATION_STABILITY_K = 10
 
+# mode="ablation_stability"에서 baseline과 비교할 feature 조합들.
+# "all4": 최종 확정 4개 전부 묶음. "strong_pair"/"weak_pair": permutation importance 기준
+# 신호가 뚜렷했던 2개(cold_contact/structural_phishing_score)와 경계선이었던 2개
+# (is_sms_initiated_unreg/repeat_pressure_intensity)를 나눠서, 4개 전체의 효과가 실제로
+# 어느 쪽에서 나오는지 개별적으로 확인하기 위함.
+ABLATION_STABILITY_FEATURE_SETS = {
+    "all4": FINAL_CANDIDATE_FEATURES,
+    "strong_pair": ["cold_contact", "structural_phishing_score"],
+    "weak_pair": ["is_sms_initiated_unreg", "repeat_pressure_intensity"],
+}
+
 # mode="tune"일 때 Optuna trial 횟수 / validation 비율
 # (train_set를 train_sub/val_sub로 나눠서, val_sub로만 탐색 평가 -> test_set은 안 건드림).
 TUNE_N_TRIALS = 50
@@ -324,15 +335,15 @@ def run_ablation_mode():
 
 
 def run_ablation_stability_mode():
-    """파생 feature 안정성 재검증 모드: run_ablation_mode()로 이미 확정된 최종 feature 조합
-    (기본값: feature_ablation.FINAL_CANDIDATE_FEATURES 4개)의 baseline 대비 성능 차이가
-    "실제 효과"인지 "단일 실행의 우연(노이즈)"인지, StratifiedKFold(K회 반복)로 재검증.
-    run_ablation_mode()와 달리 "무엇을 고를지"를 다시 정하지 않고, 이미 고른 조합 하나의
-    성능만 K번 비교함(feature_ablation.run_stability_check() 참고).
+    """파생 feature 안정성 재검증 모드: run_ablation_mode()로 이미 확정된 최종 feature 조합들
+    (ABLATION_STABILITY_FEATURE_SETS — 4개 전체/강한 2개/약한 2개)이 baseline 대비 보인 성능
+    차이가 "실제 효과"인지 "단일 실행의 우연(노이즈)"인지, StratifiedKFold(K회 반복)로 재검증.
+    run_ablation_mode()와 달리 "무엇을 고를지"를 다시 정하지 않고, 이미 고른 조합(들)의 성능만
+    같은 fold 분할 안에서 K번 비교함(feature_ablation.run_stability_check() 참고).
     결과는 feature_stability_results/feature_stability_check.json에 저장됨."""
     return run_stability_check(
         fixed_config=config,
-        final_candidate_features=FINAL_CANDIDATE_FEATURES,
+        feature_sets=ABLATION_STABILITY_FEATURE_SETS,
         k=ABLATION_STABILITY_K,
         n=N,
         phishing_rate=config.CLASS_IMBALANCE,
@@ -456,12 +467,14 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
 #                                                     ABLATION_LEAKAGE_THRESHOLD를 직접 수정할 것.
 #   python -X utf8 -m Simulator.main -m ablation_stability
 #                                                  -> 파생 feature 안정성 재검증: -m ablation으로 이미 확정된
-#                                                     최종 feature 조합(FINAL_CANDIDATE_FEATURES)의 baseline
-#                                                     대비 성능 차이가 노이즈인지 StratifiedKFold(기본 K=10)로 재검증.
-#                                                     "무엇을 고를지" 재결정이 아니라 이미 고른 조합의 성능만
-#                                                     K회 반복 비교(run_sensitivity()와 동일한 K-Fold 패턴).
-#                                                     결과는 feature_stability_results/feature_stability_check.json에 저장.
-#                                                     K를 바꾸려면 코드 상단의 ABLATION_STABILITY_K를 직접 수정할 것.
+#                                                     feature 조합들(ABLATION_STABILITY_FEATURE_SETS — 4개 전체
+#                                                     묶음/강한 2개/약한 2개)이 baseline 대비 보인 성능 차이가
+#                                                     노이즈인지, 같은 fold 분할 안에서 StratifiedKFold(기본 K=10)로
+#                                                     한 번에 재검증. "무엇을 고를지" 재결정이 아니라 이미 고른
+#                                                     조합(들)의 성능만 K회 반복 비교(run_sensitivity()와 동일한
+#                                                     K-Fold 패턴). 결과는 feature_stability_results/feature_stability_check.json에 저장.
+#                                                     K나 비교할 조합을 바꾸려면 코드 상단의 ABLATION_STABILITY_K/
+#                                                     ABLATION_STABILITY_FEATURE_SETS를 직접 수정할 것.
 #   python -X utf8 -m Simulator.main -m tune      -> Optuna로 XGBoost/LightGBM 둘 다 하이퍼파라미터
 #                                                     탐색 후 val PR-AUC 더 높은 쪽(winner)을 선택.
 #                                                     train_set 안에서 train_sub/val_sub로 나눠

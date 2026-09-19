@@ -343,7 +343,8 @@ def _diff_summary(baseline_summary: dict, final_summary: dict) -> dict:
 
 def run_stability_check(
     fixed_config,                              # config.py 모듈. build_dataset()에 그대로 전달.
-    final_candidate_features=None,             # 검증할 파생 feature 조합. None이면 FINAL_CANDIDATE_FEATURES(4개) 사용.
+    feature_sets=None,                         # {조합명: [파생 feature 목록]} 형태. baseline과 각각 비교됨.
+                                                # None이면 {"final": FINAL_CANDIDATE_FEATURES}(4개 전체 묶음 1개)로 진행.
     k: int = DEFAULT_STABILITY_K,
     n: int = 100000,                           # build_dataset()에 그대로 전달.
     phishing_rate: Optional[float] = None,     # build_dataset()에 그대로 전달.
@@ -353,14 +354,17 @@ def run_stability_check(
     fold_seed: int = 7,                        # StratifiedKFold용 random_state. run_sensitivity()의 fold_seed와 동일한 역할.
     out_dir: Path = _STABILITY_RESULTS_DIR,
 ) -> dict:
-    """run_feature_selection_pipeline()으로 이미 확정된 파생 feature 조합(기본값: FINAL_CANDIDATE_FEATURES
-    4개)이 baseline 대비 보인 성능 차이가 "실제 효과"인지 "단일 실행에서 나온 우연(노이즈)"인지 확인하는
-    사후 검증 함수.
-    run_feature_selection_pipeline()과 달리 "무엇을 고를지"를 다시 결정하지 않고,
-    "이미 고른" 조합 하나만 대상으로 함 -> dataset은 동일하게 1개만 생성(재생성 X)하고,
-    StratifiedKFold로 나눈 K개 fold에서 baseline_model/final_model을 K번씩 반복 학습·평가해
-    mean/std/sem을 비교함(run_sensitivity()와 동일한 K-Fold 패턴)"""
-    final_candidate_features = final_candidate_features or FINAL_CANDIDATE_FEATURES
+    """run_feature_selection_pipeline()으로 이미 확정된 파생 feature 조합이 baseline 대비 보인 성능
+    차이가 "실제 효과"인지 "단일 실행에서 나온 우연(노이즈)"인지 확인하는 사후 검증 함수.
+    run_feature_selection_pipeline()과 달리 "무엇을 고를지"를 다시 결정하지 않고, "이미 고른"
+    조합(들)만 대상으로 함 -> dataset은 동일하게 1개만 생성(재생성 X)하고, StratifiedKFold로 나눈
+    K개 fold에서 baseline 모델 + feature_sets에 담긴 조합별 모델을 K번씩 반복 학습·평가해
+    mean/std/sem을 비교함(run_sensitivity()와 동일한 K-Fold 패턴).
+
+    feature_sets는 {"조합명": [파생 feature 목록]} 형태의 dict라 4개 전체 묶음뿐 아니라, 개별
+    feature 1개씩이나 부분집합(예: 강한 신호 2개 vs 약한 신호 2개)도 한 번의 실행(같은 fold 분할)
+    안에서 함께 비교할 수 있음 -> 조합끼리 서로 다른 fold로 평가되는 걸 방지해 공정한 비교가 됨."""
+    feature_sets = feature_sets or {"final": FINAL_CANDIDATE_FEATURES}
 
     # dataset은 run_feature_selection_pipeline()과 동일하게 1회만 생성. split만 K번 바뀜.
     df = build_dataset(
@@ -371,13 +375,16 @@ def run_stability_check(
     df = prepare_categorical(df)
 
     baseline_cols = get_feature_columns()
-    final_cols = baseline_cols + final_candidate_features
+    # combo_cols: {조합명: baseline_cols + 해당 조합의 파생 feature 목록}
+    combo_cols = {name: baseline_cols + feats for name, feats in feature_sets.items()}
 
     y = df["is_phishing"]
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=fold_seed)
 
-    # baseline_folds/final_folds: fold별 evaluate() 결과(K개씩)를 모으는 곳.
-    baseline_folds, final_folds = [], []
+    # baseline_folds: baseline 모델의 fold별 evaluate() 결과(K개).
+    # combo_folds: {조합명: [fold별 evaluate() 결과(K개)]}.
+    baseline_folds = []
+    combo_folds = {name: [] for name in feature_sets}
     for train_idx, val_idx in skf.split(df, y):
         train_fold = df.iloc[train_idx]
         val_fold = df.iloc[val_idx]
@@ -386,24 +393,34 @@ def run_stability_check(
         baseline_model = train_model(train_fold, feature_cols=baseline_cols)
         baseline_folds.append(evaluate(baseline_model, val_fold, feature_cols=baseline_cols, threshold_df=train_fold))
 
-        final_model = train_model(train_fold, feature_cols=final_cols)
-        final_folds.append(evaluate(final_model, val_fold, feature_cols=final_cols, threshold_df=train_fold))
+        # 같은 fold(train_fold/val_fold) 안에서 조합별 모델도 함께 학습·평가 -> baseline과 동일한
+        # 분할을 공유해야 diff 비교가 공정함(조합마다 다른 fold를 쓰면 fold 차이가 diff에 섞여 들어감).
+        for name, cols in combo_cols.items():
+            model = train_model(train_fold, feature_cols=cols)
+            combo_folds[name].append(evaluate(model, val_fold, feature_cols=cols, threshold_df=train_fold))
 
     baseline_summary = summarize_fold_results(baseline_folds)
-    final_summary = summarize_fold_results(final_folds)
+
+    # combos: {조합명: {features, feature_count, summary, diff(vs baseline)}}
+    combos = {}
+    for name, feats in feature_sets.items():
+        summary = summarize_fold_results(combo_folds[name])
+        combos[name] = {
+            "features": feats,
+            "feature_count": len(combo_cols[name]),
+            "summary": summary,
+            # summary - baseline_summary의 mean 차이만 따로 뽑은 요약. 음수면 이 조합이 평균적으로
+            # 더 낮았다는 뜻이지만, sem(표준오차) 대비 작은 차이면 노이즈 범위로 봐야 함(자동 판정은 안 함).
+            "diff(vs baseline, mean 기준)": _diff_summary(baseline_summary, summary),
+        }
 
     payload = {
         "kind": "feature_stability_check",
         "k": k,
         "n": n,
-        "final_candidate_features": final_candidate_features,
         "baseline_feature_count": len(baseline_cols),
-        "final_feature_count": len(final_cols),
         "baseline_summary": baseline_summary,
-        "final_summary": final_summary,
-        # final_summary - baseline_summary의 mean 차이만 따로 뽑은 요약. 음수면 final이 평균적으로
-        # 더 낮았다는 뜻이지만, sem(표준오차) 대비 작은 차이면 노이즈 범위로 봐야 함(자동 판정은 안 함).
-        "diff(final-baseline, mean 기준)": _diff_summary(baseline_summary, final_summary),
+        "combos": combos,
     }
 
     out_dir.mkdir(parents=True, exist_ok=True)
