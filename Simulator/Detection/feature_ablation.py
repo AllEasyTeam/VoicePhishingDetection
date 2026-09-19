@@ -347,7 +347,7 @@ def _diff_summary(baseline_summary: dict, final_summary: dict) -> dict:
 def run_stability_check(
     fixed_config,                              # config.py 모듈. build_dataset()에 그대로 전달.
     feature_sets=None,                         # {조합명: [파생 feature 목록]} 형태. baseline과 각각 비교됨.
-                                                # None이면 {"final": FINAL_CANDIDATE_FEATURES}(4개 전체 묶음 1개)로 진행.
+                                                # None이면 {"remaining_candidates": CANDIDATE_DERIVED_FEATURES}(미확정 9개 묶음 1개)로 진행.
     k: int = DEFAULT_STABILITY_K,
     n: int = 100000,                           # build_dataset()에 그대로 전달.
     phishing_rate: Optional[float] = None,     # build_dataset()에 그대로 전달.
@@ -366,8 +366,13 @@ def run_stability_check(
 
     feature_sets는 {"조합명": [파생 feature 목록]} 형태의 dict라 4개 전체 묶음뿐 아니라, 개별
     feature 1개씩이나 부분집합(예: 강한 신호 2개 vs 약한 신호 2개)도 한 번의 실행(같은 fold 분할)
-    안에서 함께 비교할 수 있음 -> 조합끼리 서로 다른 fold로 평가되는 걸 방지해 공정한 비교가 됨."""
-    feature_sets = feature_sets or {"final": FINAL_CANDIDATE_FEATURES}
+    안에서 함께 비교할 수 있음 -> 조합끼리 서로 다른 fold로 평가되는 걸 방지해 공정한 비교가 됨.
+
+    주의: feature_sets에 넣는 feature는 baseline_cols(=get_feature_columns())에 아직 없는 것이어야
+    함. FINAL_CANDIDATE_FEATURES(구 4개 후보)는 이미 SCHEMA에 등록되어 baseline_cols에 포함되므로
+    여기 다시 넣으면 컬럼이 중복 선택됨 -> 기본값은 아직 SCHEMA 미등록인 CANDIDATE_DERIVED_FEATURES
+    (9개, 1단계 선정에서 탈락/대기 중인 후보)를 하나의 묶음으로 재검증하도록 되어 있음."""
+    feature_sets = feature_sets or {"remaining_candidates": CANDIDATE_DERIVED_FEATURES}
 
     # dataset은 run_feature_selection_pipeline()과 동일하게 1회만 생성. split만 K번 바뀜.
     df = build_dataset(
@@ -378,6 +383,18 @@ def run_stability_check(
     df = prepare_categorical(df)
 
     baseline_cols = get_feature_columns()
+
+    # feature_sets 안의 feature가 이미 baseline_cols에 있으면(예: SCHEMA에 이미 등록된 확정
+    # feature를 실수로 다시 넣은 경우) train_model()에서 컬럼 중복 선택으로 알아보기 힘든
+    # 에러(XGBoost 내부 dtype AttributeError 등)가 나므로, 미리 명확한 메시지로 막음.
+    for name, feats in feature_sets.items():
+        overlap = set(feats) & set(baseline_cols)
+        if overlap:
+            raise ValueError(
+                f"feature_sets[{name!r}]에 이미 baseline에 포함된 feature가 있음: {sorted(overlap)} "
+                "-> 이미 SCHEMA에 등록된 feature는 다시 비교 대상으로 넣지 않아도 됨."
+            )
+
     # combo_cols: {조합명: baseline_cols + 해당 조합의 파생 feature 목록}
     combo_cols = {name: baseline_cols + feats for name, feats in feature_sets.items()}
 

@@ -276,6 +276,10 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 - ④ `-m generate`/`-m final` 실제 실행 완료 — `DataSet/final_dataset.*` shape=(100000, 29)(원본 21+파생 4+비feature 2+라벨 2), 4개 파생 feature 전부 결측 0건으로 확인.
 - **부수 수정**: `get_feature_columns()`가 이제 파생 4개를 포함하므로, `build_dataset()` 결과만으로 바로 `get_feature_columns()`를 쓰던 `sensitivity_analysis.py::run_sensitivity()`/`run_stress_sensitivity()`에도 `add_candidate_features()` 호출을 추가(안 하면 파생 컬럼이 없어 KeyError). `feature_ablation.py::CANDIDATE_DERIVED_FEATURES`에서도 확정된 4개를 제거(9개만 남음) — 안 그러면 이제 `get_feature_columns()`(=`baseline_cols`)에 이미 포함된 4개가 `full_cols`에서 중복 선택됨.
 - (선택) `-m ablation_stability`는 baseline 대비 성능 차이 자체가 노이즈인지 K-Fold로 재검증하는 별도 도구로 계속 사용 가능(위에서 이미 실행 완료).
+- **뒤늦게 발견/수정한 회귀 버그**: 위 SCHEMA 등록 이후 `baseline_cols`(=`get_feature_columns()`)가 이미 파생 4개를 포함하게 되면서, `run_stability_check()`의 기존 기본값(`FINAL_CANDIDATE_FEATURES`, 구 4개)과 `main.py::ABLATION_STABILITY_FEATURE_SETS`의 `all4`/`strong_pair`/`weak_pair` 조합이 전부 "이미 baseline에 있는 feature를 또 더하는" 상태가 되어 컬럼 중복으로 크래시하는 문제가 있었음(알아보기 힘든 XGBoost 내부 `AttributeError`로 발생). 다음과 같이 수정함:
+  - `run_stability_check()`에 `feature_sets`의 각 조합이 `baseline_cols`와 겹치면 명확한 `ValueError`를 내는 방어 로직 추가.
+  - `run_stability_check()` 기본값을 `{"remaining_candidates": CANDIDATE_DERIVED_FEATURES}`(아직 SCHEMA 미등록인 9개 묶음)로 변경.
+  - `main.py::ABLATION_STABILITY_FEATURE_SETS`도 동일하게 `{"remaining_candidates": CANDIDATE_DERIVED_FEATURES}`로 교체(9개 중 일부가 단일 실행의 우연 때문에 탈락한 건 아닌지 재검증하는 용도로 의미 변경).
 
 ---
 

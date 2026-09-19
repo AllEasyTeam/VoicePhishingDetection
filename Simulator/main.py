@@ -12,7 +12,7 @@ from Simulator.Detection.sensitivity_analysis import run_sensitivity, run_stress
 from Simulator.Detection.feature_ablation import (
     run_feature_selection_pipeline,
     run_stability_check,
-    FINAL_CANDIDATE_FEATURES,
+    CANDIDATE_DERIVED_FEATURES,
 )
 from Simulator.Detection.optuna_apply import run_optuna_tuning_and_compare
 from Simulator.Detection.derived_features import add_candidate_features
@@ -115,14 +115,13 @@ ABLATION_LEAKAGE_THRESHOLD = None
 ABLATION_STABILITY_K = 10
 
 # mode="ablation_stability"에서 baseline과 비교할 feature 조합들.
-# "all4": 최종 확정 4개 전부 묶음. "strong_pair"/"weak_pair": permutation importance 기준
-# 신호가 뚜렷했던 2개(cold_contact/structural_phishing_score)와 경계선이었던 2개
-# (is_sms_initiated_unreg/repeat_pressure_intensity)를 나눠서, 4개 전체의 효과가 실제로
-# 어느 쪽에서 나오는지 개별적으로 확인하기 위함.
+# 2026-09-19 SCHEMA 연결 이후 최종 확정 4개(구 FINAL_CANDIDATE_FEATURES)는 이미 baseline_cols에
+# 포함돼 있어서 더 이상 비교 대상으로 넣으면 안 됨(넣으면 컬럼 중복 -> run_stability_check()가
+# ValueError로 막음). 그래서 여기서는 아직 SCHEMA 미등록인 나머지 9개(CANDIDATE_DERIVED_FEATURES,
+# 1단계 선정에서 탈락/대기 중인 후보)를 하나의 묶음으로 재검증하도록 둠 -> 혹시 그중 일부가
+# 단일 실행의 우연 때문에 탈락한 건 아닌지 K-Fold로 다시 확인하는 용도.
 ABLATION_STABILITY_FEATURE_SETS = {
-    "all4": FINAL_CANDIDATE_FEATURES,
-    "strong_pair": ["cold_contact", "structural_phishing_score"],
-    "weak_pair": ["is_sms_initiated_unreg", "repeat_pressure_intensity"],
+    "remaining_candidates": CANDIDATE_DERIVED_FEATURES,
 }
 
 # mode="tune"일 때 Optuna trial 횟수 / validation 비율
@@ -343,11 +342,12 @@ def run_ablation_mode():
 
 
 def run_ablation_stability_mode():
-    """파생 feature 안정성 재검증 모드: run_ablation_mode()로 이미 확정된 최종 feature 조합들
-    (ABLATION_STABILITY_FEATURE_SETS — 4개 전체/강한 2개/약한 2개)이 baseline 대비 보인 성능
-    차이가 "실제 효과"인지 "단일 실행의 우연(노이즈)"인지, StratifiedKFold(K회 반복)로 재검증.
-    run_ablation_mode()와 달리 "무엇을 고를지"를 다시 정하지 않고, 이미 고른 조합(들)의 성능만
-    같은 fold 분할 안에서 K번 비교함(feature_ablation.run_stability_check() 참고).
+    """파생 feature 안정성 재검증 모드: ABLATION_STABILITY_FEATURE_SETS에 담긴 feature 조합(들)이
+    baseline 대비 보인 성능 차이가 "실제 효과"인지 "단일 실행의 우연(노이즈)"인지, StratifiedKFold
+    (K회 반복)로 재검증. run_ablation_mode()와 달리 "무엇을 고를지"를 다시 정하지 않고, 이미 고른
+    조합(들)의 성능만 같은 fold 분할 안에서 K번 비교함(feature_ablation.run_stability_check() 참고).
+    주의: 조합에 넣는 feature는 SCHEMA에 아직 미등록(=baseline_cols에 없는) 것이어야 함 —
+    이미 확정 등록된 feature를 넣으면 run_stability_check()가 컬럼 중복으로 ValueError를 냄.
     결과는 feature_stability_results/feature_stability_check.json에 저장됨."""
     return run_stability_check(
         fixed_config=config,
@@ -474,15 +474,16 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
 #                                                     ABLATION_MULTICOLLINEARITY_THRESHOLD/
 #                                                     ABLATION_LEAKAGE_THRESHOLD를 직접 수정할 것.
 #   python -X utf8 -m Simulator.main -m ablation_stability
-#                                                  -> 파생 feature 안정성 재검증: -m ablation으로 이미 확정된
-#                                                     feature 조합들(ABLATION_STABILITY_FEATURE_SETS — 4개 전체
-#                                                     묶음/강한 2개/약한 2개)이 baseline 대비 보인 성능 차이가
+#                                                  -> 파생 feature 안정성 재검증: ABLATION_STABILITY_FEATURE_SETS에
+#                                                     담긴 feature 조합(들)이 baseline 대비 보인 성능 차이가
 #                                                     노이즈인지, 같은 fold 분할 안에서 StratifiedKFold(기본 K=10)로
 #                                                     한 번에 재검증. "무엇을 고를지" 재결정이 아니라 이미 고른
 #                                                     조합(들)의 성능만 K회 반복 비교(run_sensitivity()와 동일한
 #                                                     K-Fold 패턴). 결과는 feature_stability_results/feature_stability_check.json에 저장.
-#                                                     K나 비교할 조합을 바꾸려면 코드 상단의 ABLATION_STABILITY_K/
-#                                                     ABLATION_STABILITY_FEATURE_SETS를 직접 수정할 것.
+#                                                     기본값은 아직 SCHEMA 미등록인 9개 후보(CANDIDATE_DERIVED_FEATURES)
+#                                                     묶음 -> 이미 SCHEMA에 등록된(=baseline에 포함된) feature를
+#                                                     조합에 넣으면 컬럼 중복으로 에러남. K나 비교할 조합을 바꾸려면
+#                                                     코드 상단의 ABLATION_STABILITY_K/ABLATION_STABILITY_FEATURE_SETS를 직접 수정할 것.
 #   python -X utf8 -m Simulator.main -m tune      -> Optuna로 XGBoost/LightGBM 둘 다 하이퍼파라미터
 #                                                     탐색 후 val PR-AUC 더 높은 쪽(winner)을 선택.
 #                                                     train_set 안에서 train_sub/val_sub로 나눠
