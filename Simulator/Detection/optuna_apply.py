@@ -2,9 +2,13 @@
 # 목적: 최종 모델을 XGBoost/LightGBM 각각 따로 탐색한 뒤, val set PR-AUC로 비교해서
 #      더 나은 쪽을 최종 모델 종류로 선택하기 위함(main.py::run_tuning_mode() 참고).
 import optuna
+
+# 하이퍼파라미터 중요도 분석
+import optuna.importance
 import xgboost as xgb
 import lightgbm as lgb
 from sklearn.metrics import average_precision_score
+from Simulator.Detection.train_eval import lift_at_top_k
 
 
 def _lgb_pr_auc_feval(y_true, y_pred):
@@ -115,6 +119,10 @@ def run_optuna_tuning(X_train, y_train, X_val, y_val, model_type="XGBoost", n_tr
         probe_model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
         best_n_estimators = int(probe_model.best_iteration) + 1  # best_iteration은 0-indexed
 
+        # val PR-AUC(=study.best_value)와는 별개로 top-5 lift 지표 확인
+        probe_proba_val = probe_model.predict_proba(X_val)[:, 1]
+        val_lift_top1 = lift_at_top_k(y_val, probe_proba_val, k=0.01)
+
         tuned_hyperparams = {
             'n_estimators': best_n_estimators,
             'learning_rate': best_params['learning_rate'],
@@ -139,6 +147,9 @@ def run_optuna_tuning(X_train, y_train, X_val, y_val, model_type="XGBoost", n_tr
         )
         best_n_estimators = int(probe_model.best_iteration_)
 
+        probe_proba_val = probe_model.predict_proba(X_val)[:, 1]
+        val_lift_top1 = lift_at_top_k(y_val, probe_proba_val, k=0.01)
+
         tuned_hyperparams = {
             'n_estimators': best_n_estimators,
             'learning_rate': best_params['learning_rate'],
@@ -152,10 +163,29 @@ def run_optuna_tuning(X_train, y_train, X_val, y_val, model_type="XGBoost", n_tr
             'reg_lambda': best_params['reg_lambda'],
         }
 
+    # fANOVA를 통해, 하이퍼파리미터 중요도 확인. 
+    # trial 수가 너무 적거나 특정 하이퍼파라미터가 한 값으로 고정되면 계산 실패할 수 있기에 방어적으로 처리
+    try:
+        raw_importance = optuna.importance.get_param_importances(study)
+        hyperparameter_importance_ranked = [
+            {
+                "rank": i + 1,
+                "param": name,
+                "importance": round(float(value), 4),
+                "importance_pct": f"{value * 100:.1f}%",  # 전체 중요도 합 대비 이 하이퍼파라미터가 차지하는 비율
+            }
+            for i, (name, value) in enumerate(raw_importance.items())
+        ]
+    except Exception as e:
+        hyperparameter_importance_ranked = [{"error": f"중요도 계산 실패: {e}"}]
+
+
     return {
         "model_type": model_type,
         "tuned_hyperparams": tuned_hyperparams,
         "best_value(val PR-AUC)": study.best_value,
+        "val_lift_top1%": val_lift_top1,
+        "hyperparameter_importance_ranked(val PR-AUC 기준, fANOVA, 순위·비율순)": hyperparameter_importance_ranked,
         "n_trials": n_trials,
         "base_scale_pos_weight(참고용, 실제 데이터 neg/pos 비율)": base_scale,
     }
@@ -172,8 +202,35 @@ def run_optuna_tuning_and_compare(X_train, y_train, X_val, y_val, n_trials=50, r
 
     winner = "XGBoost" if xgb_result["best_value(val PR-AUC)"] >= lgb_result["best_value(val PR-AUC)"] else "LightGBM"
 
+    xgb_pr_auc = xgb_result["best_value(val PR-AUC)"]
+    lgb_pr_auc = lgb_result["best_value(val PR-AUC)"]
+    xgb_lift = xgb_result["val_lift_top1%"]
+    lgb_lift = lgb_result["val_lift_top1%"]
+
+    comparison = {
+        "PR-AUC": {
+            "XGBoost": xgb_pr_auc,
+            "LightGBM": lgb_pr_auc,
+            "diff(LightGBM - XGBoost)": round(lgb_pr_auc - xgb_pr_auc, 4),
+            "higher": "XGBoost" if xgb_pr_auc >= lgb_pr_auc else "LightGBM",
+        },
+        "Lift@Top5%": {
+            "XGBoost": xgb_lift,
+            "LightGBM": lgb_lift,
+            "diff(LightGBM - XGBoost)": round(lgb_lift - xgb_lift, 4),
+            "higher": "XGBoost" if xgb_lift >= lgb_lift else "LightGBM",
+        },
+        "hyperparameter_importance_ranked": {
+            # 두 모델은 하이퍼파라미터 종류 자체가 다르므로(예: XGBoost의 min_child_weight vs
+            # LightGBM의 num_leaves) 항목별 diff는 의미가 없음 -> 각자의 순위·비율 리스트를 나란히만 배치.
+            "XGBoost": xgb_result["hyperparameter_importance_ranked(val PR-AUC 기준, fANOVA, 순위·비율순)"],
+            "LightGBM": lgb_result["hyperparameter_importance_ranked(val PR-AUC 기준, fANOVA, 순위·비율순)"],
+        },
+    }
+
     return {
         "winner": winner,
+        "comparison": comparison,
         "XGBoost": xgb_result,
         "LightGBM": lgb_result,
     }
