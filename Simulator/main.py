@@ -27,34 +27,29 @@ GEN_SEED = 42              # build_dataset()용 random_state
 
 # DataSet/final_dataset 캐시 무효화용 버전. N/GEN_SEED/SUBGROUP_RATIO_KEY/FINAL_SOPHISTICATION은
 # 바뀌면 자동으로 감지되지만(fingerprint 비교), "생성 로직 자체"가 바뀌는 경우(코드는 바뀌었는데
-# 위 파라미터 값은 그대로인 경우)는 자동으로 감지가 안 되므로, 그럴 때 이 숫자를 수동으로 올려야
-# get_or_generate_final_dataset()이 저장된 dataset을 재사용하지 않고 강제로 다시 생성함.
-# TODO: 파생 feature ablation 검증이 끝나서 add_candidate_features()를 generate_final_dataset()에
-#       연결하게 되면, 그 시점에 이 값을 1 -> 2로 올릴 것(그래야 파생 feature 없이 저장된
-#       기존 dataset이 재사용되지 않고 파생 feature 포함 버전으로 다시 생성됨).
+# 위 파라미터 값은 그대로인 경우)는 자동으로 감지가 안 되므로, 그럴 때 이 숫자를 수동으로 올려야 dataset을 재사용하지 않고 강제로 다시 생성함.
+# TODO: 파생 feature ablation 검증 후에, add_candidate_features()를 generate_final_dataset()에
+#       연결하게 되면, 그 시점에 이 값을 1 -> 2로 수정해야 함.(그래야 기존 dataset이 재사용되지 않고 파생 feature 포함 버전으로 다시 생성됨).
 DATASET_GEN_VERSION = 1
 
-# 최종 dataset 생성 시 각 feature에 적용할 sophistication. 민감도 분석(필요 시 K=10/stress 모드
-# 재검증까지 거쳐) 결과로 확정한 값. build_dataset()의 sophistication 인자로 그대로 넘어감
+# 최종 dataset 생성 시 각 feature에 적용할 sophistication. 
+# 민감도 분석(필요 시 K=10/stress 모드로 재검증까지 거쳐) 결과로 확정한 값.
 FINAL_SOPHISTICATION = {
-    # 하나
     config.SOPH_NUMBER_TYPE_BAND: "mid",
     config.SOPH_FIRST_CONTACT: "high",
     config.SOPH_REPEAT_GAP: "low",           # K=10 재검증 완료
     config.SOPH_REPEAT_CONTACT: "mid",
-    # 지민
     config.SOPH_NUM_IN_MSG: "mid",           # stress 모드로 재검증
     config.SOPH_INNER_NUM_DIFFERS: "mid",
     config.SOPH_MSG_OFFICIAL_MATCH: "high",
     config.SOPH_SMS_TO_CALL_GAP: "mid",      # K=10 재검증 완료
-    # 다은
     config.SOPH_URL_RATE: "mid",             # stress 모드로 재검증
     config.SOPH_APP_INSTALL: "low",
     config.SOPH_SEQUENTIAL_CALLERS: "mid",
     config.SOPH_SMS_TO_CALL: "high",
 }
 
-# Track별 접근 가능 feature 시나리오 (누적 구조: 통신사가 가장 넓은 범위에 접근 가능).
+# Track별 접근 가능 feature 시나리오.
 # 최종 dataset 1개를 그대로 두고, 시나리오별로 사용하는 컬럼만 달라짐.
 TRACK_SCENARIOS = {
    # "A": [Track.CARRIER, Track.DEVICE, Track.DEVICE_STRUCTURAL],  # 통신사: A+B+C 전부 접근 가능 (현재로써는 접근 가능한 데이터 X)
@@ -63,9 +58,7 @@ TRACK_SCENARIOS = {
 }
 
 
-# 민감도분석 대상 feature 목록. run_sensitivity()의 param_name으로 그대로 넘어감.
-# config.py의 SOPH_* 상수와 일치해야 함(= generator_utils.get_soph() 조회 key).
-# 하드코딩 문자열 대신 상수를 써서, 오타 시 여기서 바로 NameError로 드러나게 함.
+# 민감도 분석 대상 feature 목록.
 SENSITIVITY_PARAMS = [
     # 하나
     config.SOPH_NUMBER_TYPE_BAND,
@@ -87,15 +80,15 @@ SENSITIVITY_PARAMS = [
 # mode="each_sen"일 때 확인할 feature 1개. 바꾸고 싶으면 이 줄만 수정(config.SOPH_* 중 하나).
 EACH_SENSITIVITY_PARAM = config.SOPH_SMS_TO_CALL_GAP
 
-# mode="each_sen"일 때 쓸 K. 기본 5(표준). 재검증하려면 이 줄만 10으로 수정 ->
-# sensitivity_results/<param_name>_k10.json으로 기존 K=5 결과와 별도 저장됨.
-EACH_SENSITIVITY_K = 10
+# mode="each_sen"일 때 쓸 K(K-fold). 
+# 기본 5(표준). 일부 feature에 대해 재검증하려면 이 값만 10으로 수정 -> 기존 K=5 결과와 별도 저장됨.
+EACH_SENSITIVITY_K = 5
 
 
-# mode="stress" 대상 시나리오 목록. run_stress_sensitivity()의 scenario_key/level_overrides로 그대로 넘어감.
+# mode="stress" 대상 시나리오 목록. 
 # config.py의 STRESS_*_KEY / STRESS_*_LEVELS 상수와 짝을 맞춰서 등록.
-# "순수가정"으로 정한 feature(예: num_in_msg, url_rate)의 절대값 자체가 틀렸을 때 성능이
-# 얼마나 흔들리는지 확인하기 위한 것으로, low/mid/high 3-preset 비교인 SENSITIVITY_PARAMS와는 별개.
+# "순수가정"으로 정한 feature의 절대값 자체가 틀렸을 때 성능이 얼마나 흔들리는지 확인하기 위한 것.
+# low/mid/high 3-preset 비교인 SENSITIVITY_PARAMS와는 별개.
 STRESS_SCENARIOS = {
     config.STRESS_NUM_IN_MSG_KEY: config.STRESS_NUM_IN_MSG_LEVELS,
     config.STRESS_URL_RATE_KEY: config.STRESS_URL_RATE_LEVELS,
@@ -104,16 +97,16 @@ STRESS_SCENARIOS = {
 # mode="stress"일 때 확인할 시나리오 1개. 바꾸고 싶으면 이 줄만 수정(STRESS_SCENARIOS의 key 중 하나).
 STRESS_SCENARIO_KEY = config.STRESS_URL_RATE_KEY
 
-# mode="stress"일 때 쓸 K. 기본 5(표준).
+# mode="stress"일 때 쓸 K(K-fold). 기본 5(표준).
 STRESS_K = 5
 
-# mode="ablation"일 때 쓸 다중공선성/데이터 누수 판정 임계값. feature_ablation.py의
-# 기본값(0.8/0.95)을 그대로 쓰고 싶으면 None으로 둠 -> 바꾸고 싶을 때만 이 줄 수정.
+# mode="ablation"일 때 쓸 다중공선성/데이터 누수 판정 임계값. 
+# feature_ablation.py의 기본값(0.8/0.95)을 그대로 쓰고 싶으면 None으로 둠 -> 바꾸고 싶을 때만 수정.
 ABLATION_MULTICOLLINEARITY_THRESHOLD = None
 ABLATION_LEAKAGE_THRESHOLD = None
 
-# mode="tune"일 때 Optuna trial 횟수 / validation 비율(train_set 중 permutation importance와
-# 동일한 방식으로 train_sub/val_sub를 나눠서, val_sub로만 탐색 평가 -> test_set은 안 건드림).
+# mode="tune"일 때 Optuna trial 횟수 / validation 비율
+# (train_set를 train_sub/val_sub로 나눠서, val_sub로만 탐색 평가 -> test_set은 안 건드림).
 TUNE_N_TRIALS = 50
 TUNE_VAL_SIZE = 0.2
 
@@ -123,18 +116,16 @@ TUNE_VAL_SIZE = 0.2
 # ------------------------------------------------------------
 # 문제: run_final()이 매번 build_dataset()으로 처음부터 다시 생성하면, N=100000 기준
 #      몇 초씩 낭비됨. 그런데 GEN_SEED 등이 고정이라 매번 만들어도 "완전히 동일한" dataset이
-#      나오니, 이미 저장된 파일이 있으면 그냥 그걸 읽는 게 더 낫다.
+#      나오니, 이미 저장된 파일이 있으면 해당 파일을 가져와서 사용하는 게 더 효율적임.
 # 해결: 저장할 때(save_final_dataset) dataset과 함께 "이번에 쓴 생성 파라미터"를
-#      final_dataset.meta.json에 지문(fingerprint)으로 같이 남긴다. 다음에 get_or_
-#      generate_final_dataset()이 불릴 때, 지금 설정의 지문과 저장된 지문을 비교해서:
+#      final_dataset.meta.json에 지문(fingerprint)으로 같이 남김.
+#      다음에 get_or_generate_final_dataset()이 불릴 때, 지금 설정의 지문과 저장된 지문을 비교해서:
 #        - 지문이 같음 -> 파라미터가 하나도 안 바뀌었다는 뜻 -> parquet 파일을 그대로 읽어서 반환
 #        - 지문이 다름(또는 파일이 아예 없음) -> N/시드/subgroup/sophistication 중 뭔가
 #          바뀌었다는 뜻 -> generate_final_dataset()으로 새로 생성해서 덮어씀
-# 한계: 이 지문은 "숫자로 바뀌는 파라미터"만 감지한다. 파생 feature를 여기 새로 연결하는
-#      것처럼, 파라미터 값은 그대로인데 "생성 함수 안의 코드 자체"가 바뀌는 경우는 지문에
-#      안 잡힌다 -> 그럴 때는 DATASET_GEN_VERSION 숫자를 수동으로 올려서 지문을 강제로
-#      바꿔야 재사용되지 않고 새로 생성된다(이것도 못 하면 코드는 바뀌었는데 예전 dataset이
-#      계속 재사용되는 채로 조용히 넘어갈 수 있음).
+# 한계: 이 방식은 "숫자로 바뀌는 파라미터"만 감지한다. 파생 feature를 여기 새로 연결하는
+#      것처럼, 파라미터 값은 그대로인데 "생성 함수 안의 코드 자체"가 바뀌는 경우는 안 잡힌다 
+#      -> 그럴 때는 DATASET_GEN_VERSION 숫자를 수동으로 올려서 지문을 강제로 바꿔야 재사용되지 않고 새로 생성된다.
 # mode="generate"는 이 캐시를 무시하고 generate_final_dataset()을 직접 불러 항상 강제로
 # 새로 만든다(예: 캐시가 있어도 일부러 재현성만 다시 확인하고 싶을 때).
 def _dataset_fingerprint() -> dict:
@@ -178,8 +169,7 @@ def generate_final_dataset():
     )
     save_final_dataset(df)  # Detection 쪽 가공(category 변환/분할) 전, 생성 직후의 원본을 저장
     # 파생 feature 13개는 전부 ablation 검증 대기 중이라 여기서는 아직 추가하지 않음
-    # (Detection/derived_features.py의 add_candidate_features() 참고). 검증 끝나고 여기에
-    # 연결하게 되면 DATASET_GEN_VERSION을 올려서 기존 캐시를 무효화할 것.
+    # 검증 끝나고 여기에 연결하게 되면 DATASET_GEN_VERSION을 올려서 기존 캐시를 무효화할 것.
     return df
 
 
@@ -307,9 +297,7 @@ def run_stress_mode(scenario_key=None, k=None):
 
 
 def run_ablation_mode():
-    """파생 feature 선정 파이프라인 모드: baseline(원본만) vs full(원본+13개) 비교 ->
-    train set 기준 다중공선성 점검(+데이터 누수 플래그) -> Embedded method(SHAP 참고) +
-    Permutation Importance 기반 가지치기 -> 최종 feature set으로 재학습 -> test set 평가.
+    """파생 feature 선정 파이프라인 모드.
     결과는 feature_selection_results/feature_selection_pipeline.json에 저장됨."""
     kwargs = dict(
         fixed_config=config,
@@ -318,6 +306,8 @@ def run_ablation_mode():
         subgroup_ratio_key=SUBGROUP_RATIO_KEY,
         sophistication=FINAL_SOPHISTICATION,  # 실제 최종 dataset과 동일한 조건에서 검증되도록
     )
+
+    # feature_ablation.py에 선언된 상수 값 이외의 값을 설정한 경우, 함께 넘김.
     if ABLATION_MULTICOLLINEARITY_THRESHOLD is not None:
         kwargs["multicollinearity_threshold"] = ABLATION_MULTICOLLINEARITY_THRESHOLD
     if ABLATION_LEAKAGE_THRESHOLD is not None:

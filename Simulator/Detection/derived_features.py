@@ -1,12 +1,7 @@
-# 파생 feature 생성 파일 (ablation 검증용, 전부 아직 확정 아님).
-# 역할: Generation이 만든 원본 컬럼들로부터 Detection 쪽에서만 쓰는 파생 feature를 계산.
-#      config.py는 import하지 않음(Generation-Detection Separation 원칙 유지 -> 생성 시
-#      쓴 파라미터가 아니라 dataset의 "출력 컬럼"만으로 계산).
+# 파생 feature 생성 파일 (ablation 검증용이므로 후보일 뿐. 확정 X).
+# 역할: Generation이 만든 원본 컬럼들로부터 Detection 쪽에서만 쓰는 파생 feature를 생성.
 #
-# 13개 전부 ablation 검증(baseline vs baseline+전체 vs leave-one-out) 대상이라, 아직
-# schema_columns.py의 SCHEMA에도 등록하지 않았고 run_final()/run_sensitivity()/
-# run_stress_sensitivity() 등 기존 파이프라인 어디에도 연결하지 않음. 검증 후 유의미하다고
-# 확인된 것만 SCHEMA에 등록해서 실제 학습에 반영할 예정.
+# 13개 전부 ablation 검증(baseline vs baseline+전체 vs leave-one-out) 대상임.
 import numpy as np
 
 
