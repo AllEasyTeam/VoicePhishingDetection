@@ -1,12 +1,16 @@
-# 파생 feature 생성 파일 (ablation 검증용이므로 후보일 뿐. 확정 X).
-# 역할: Generation이 만든 원본 컬럼들로부터 Detection 쪽에서만 쓰는 파생 feature를 생성.
+# 파생 feature 생성 파일.
+# 역할: Generation이 만든 원본 컬럼들로부터 Detection 쪽에서만 쓰는 파생 feature 13개를 전부 계산.
 #
-# 13개 전부 ablation 검증(baseline vs baseline+전체 vs leave-one-out) 대상임.
+# 13개 중 4개(structural_phishing_score/is_sms_initiated_unreg/cold_contact/repeat_pressure_intensity)는
+# ablation 검증 통과 후 schema_columns.py의 SCHEMA에 확정 등록됨(2026-09-19, Structure.md 참고).
+# main.py::generate_final_dataset()이 이 함수 호출 후 SCHEMA 등록 컬럼만 필터링해서 최종 dataset에 반영.
+# 나머지 9개는 검증 탈락(다중공선성 제거/permutation importance<=0)했거나 대기 중이라 여전히 미등록.
+# 이 함수 자체는 향후 재검증(feature_ablation.py)을 위해 항상 13개 전부를 계산해서 반환함.
 import numpy as np
 
 
 def add_candidate_features(df):
-    """ablation 검증 대상 13개 파생 feature를 df에 추가해서 반환. 원본 df는 변경하지 않음(copy 사용).
+    """13개 파생 feature(확정 4개 + 미확정 9개)를 df에 추가해서 반환. 원본 df는 변경하지 않음(copy 사용).
     urgency_path가 is_malicious_bait_sms 값을 그대로 쓰므로, 계산 순서(3번 -> 5번)가 중요함."""
     df = df.copy()
 

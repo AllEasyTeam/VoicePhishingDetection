@@ -59,19 +59,18 @@ _RESULTS_DIR = _PROJECT_ROOT / "feature_selection_results"
 # run_stability_check() 결과 저장 폴더.
 _STABILITY_RESULTS_DIR = _PROJECT_ROOT / "feature_stability_results"
 
-# add_candidate_features()가 만드는 13개의 후보 파생 컬럼(Derived features)명 목록. 
+# add_candidate_features()가 만드는 13개 파생 컬럼 중, 아직 SCHEMA에 미등록인 9개(=여전히 ablation
+# 검증 후보인 것들)만 나열한 목록. 나머지 4개(FINAL_CANDIDATE_FEATURES)는 검증 통과 후
+# schema_columns.py의 SCHEMA에 확정 등록되어 이제 get_feature_columns()(=baseline_cols)에 이미
+# 포함되므로, 여기 다시 넣으면 baseline_cols와 full_cols에서 같은 컬럼이 중복 선택됨 -> 제외함.
 CANDIDATE_DERIVED_FEATURES = [
     "cross_channel_urgency_score",
-    "repeat_pressure_intensity",
     "is_malicious_bait_sms",
-    "cold_contact",
     "urgency_path",
     "unreg_sender_with_url",
-    "is_sms_initiated_unreg",
     "is_rapid_s2c_contact",
     "is_zero_gap_repeat",
     "has_any_msg_bait",
-    "structural_phishing_score",
     "is_high_risk_number_type",
     "suspicious_unreg_number_combo",
 ]
@@ -223,11 +222,13 @@ def run_feature_selection_pipeline(
         train_set, test_size=val_size, random_state=42, stratify=train_set["is_phishing"]
     ) # train_set을 train_sub(80%), val_sub(20%)로 분할.
 
-    # 4. feature 목록 확정 
-    # baseline_cols : 원본 column 23개 중 is_feature=True인 21개의 column 목록만 추출
+    # 4. feature 목록 확정
+    # baseline_cols : SCHEMA 기준 is_feature=True인 column 목록(원본 21개 + 이미 확정된 파생 4개 = 25개).
+    # 확정된 4개(FINAL_CANDIDATE_FEATURES)는 SCHEMA에 등록돼 있어 자동으로 여기 포함됨 -> "지금 production이
+    # 실제로 쓰는 feature 조합"이 baseline이 되는 셈(향후 새 파생 feature 후보를 검증할 때도 동일한 의미).
     baseline_cols = get_feature_columns()
 
-    # full_cols : 원본 21개의 column + 13개의 파생 feature => 총 34개의 column 목록
+    # full_cols : baseline_cols(25개) + 아직 미확정인 파생 feature 9개(CANDIDATE_DERIVED_FEATURES) => 총 34개
     full_cols = baseline_cols + CANDIDATE_DERIVED_FEATURES
 
     # --- 1단계 : baseline vs full 

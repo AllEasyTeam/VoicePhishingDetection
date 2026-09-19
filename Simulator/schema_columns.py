@@ -1,7 +1,7 @@
 """
-schema_columns.py — 실제 21개 컬럼 데이터.
+schema_columns.py — 실제 컬럼 데이터.
 
-역할: schema.py의 ColumnSchema 틀을 이용해, 실제 컬럼 24개를 채워넣은 목록.
+역할: schema.py의 ColumnSchema 틀을 이용해, 실제 컬럼(원본 23개 + 확정 파생 feature 4개)을 채워넣은 목록.
       컬럼 추가/수정 시 이 파일만 건드리면 됨.
 
 Row 단위: 1 row = 1 사건(경험 전체 요약). 1개 번호가 아님.
@@ -91,7 +91,20 @@ SCHEMA: list[ColumnSchema] = [
     ColumnSchema("is_global", "국제번호 여부", ValueType.BINARY, Track.DEVICE),  # 대표번호 기준
 
     ColumnSchema("is_sequential_callers", "순차복수사칭 여부", ValueType.BINARY, Track.DEVICE),  # 이 사건 안 복수번호 릴레이 여부
+
+    # ── 파생 feature 4개 (ablation 검증 통과, 2026-09-19 확정. Structure.md 참고) ──
+    # Detection/derived_features.py::add_candidate_features()가 원본 컬럼만으로 계산.
+    # main.py::generate_final_dataset()이 add_candidate_features() 호출 후 이 SCHEMA에 등록된
+    # 컬럼만 필터링해서 최종 dataset에 반영(나머지 9개 후보는 미등록 상태로 계속 제외됨).
+    ColumnSchema("structural_phishing_score", "문자 구조적 위협 누적 지수(0~5점)",
+                 ValueType.CONTINUOUS_COUNT, Track.DEVICE_STRUCTURAL),  # 하위 조건 미발생분은 0점 처리 -> 결측 없음
+    ColumnSchema("is_sms_initiated_unreg", "미등록 발신자의 문자 개시 여부", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("cold_contact", "완전 낯선 접촉 여부(미저장+이력 없음)", ValueType.BINARY, Track.DEVICE),
+    ColumnSchema("repeat_pressure_intensity", "재연락 압박 강도(재연락 간격 기반 연속 점수)",
+                 ValueType.CONTINUOUS_SCORE, Track.DEVICE),  # 재연락 없으면 0.0 처리 -> 결측 없음
 ]
-# 파생 feature 13개는 전부 ablation 검증 대기 중이라 SCHEMA에 등록하지 않음
-# (Detection/derived_features.py의 add_candidate_features() 참고). 검증 후 유의미하다고
-# 확인된 것만 여기 등록해서 get_feature_columns()/실제 학습에 반영할 예정.
+# 나머지 파생 feature 9개(cross_channel_urgency_score/is_malicious_bait_sms/urgency_path/
+# unreg_sender_with_url/is_rapid_s2c_contact/is_zero_gap_repeat/has_any_msg_bait/
+# is_high_risk_number_type/suspicious_unreg_number_combo)는 ablation 검증에서 탈락(다중공선성
+# 제거 또는 permutation importance<=0)했거나 아직 검증 대기 중이라 SCHEMA에 등록하지 않음
+# (Detection/derived_features.py의 add_candidate_features() 참고).

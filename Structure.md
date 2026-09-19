@@ -86,7 +86,7 @@
 
 역할: 실제 Dataset에 필요한 column 목록을 생성하는 파일. 컬럼 추가/수정 시 이 파일만 건드리면 됨.
 
-- `SCHEMA: list[ColumnSchema]`: 실제 컬럼 23개 정의(2026-09 기준). `phone_number`/`call_time` 2개만 `is_feature=False`(학습 제외 — phone_number는 통째로 암기 위험, call_time은 hour_bucket과 중복 방지), 나머지 21개가 실제 학습 feature.
+- `SCHEMA: list[ColumnSchema]`: 실제 컬럼 27개 정의(원본 23개 + 확정 파생 feature 4개, 2026-09-19 기준). `phone_number`/`call_time` 2개만 `is_feature=False`(학습 제외 — phone_number는 통째로 암기 위험, call_time은 hour_bucket과 중복 방지), 나머지 25개(원본 21개 + 파생 4개)가 실제 학습 feature.
 - 파일 하단 주석: `derived_features.py`의 13개 파생 feature 후보는 ablation 검증 대기 중이라 아직 `SCHEMA`에 미등록.
 
 ---
@@ -191,8 +191,8 @@
 
 역할: 파생 feature 후보 column을 기존 dataset에 추가하는 함수 선언.
 
-- `add_candidate_features(df)`: 원본 컬럼만으로 13개 파생 feature를 계산해서 `df`에 추가. 
-- 13개 모두 `schema_columns.py`의 `SCHEMA`에는 미등록(검증 이전) — `feature_ablation.py`의 ablation 검증을 통과한 것만 등록(최종 확정 목록은 아래 `feature_ablation.py` 섹션 참고).
+- `add_candidate_features(df)`: 원본 컬럼만으로 13개 파생 feature 후보를 전부 계산해서 `df`에 추가(확정 여부와 무관하게 항상 13개 전부 계산).
+- 13개 중 4개는 ablation 검증 통과 후 `schema_columns.py`의 `SCHEMA`에 확정 등록됨(2026-09-19). `main.py::generate_final_dataset()`이 이 함수 호출 후 SCHEMA 등록 컬럼만 필터링해서 최종 dataset에는 4개만 반영. 나머지 9개는 여전히 미등록(검증 탈락 또는 대기 중, 최종 확정 목록은 아래 `feature_ablation.py` 섹션 참고).
 
 ---
 
@@ -267,12 +267,15 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 
 전 지표에서 diff가 baseline/final 결합 표준오차(√(sem²+sem²))보다 작음 → **통계적으로 baseline과 구별 안 됨**. 지난 단일 실행에서 관찰됐던 PR-AUC/Lift@Top5% 하락은 실제 효과가 아니라 XGBoost 프로세스 간 비결정성 노이즈의 한 표본이었음이 이 재검증으로 확인됨. 4개 유지 결정을 뒷받침하는 근거.
 
-**참고**: `run_stability_check()`는 이후 `feature_sets` 인자로 여러 조합(예: `ABLATION_STABILITY_FEATURE_SETS`의 `all4`/`strong_pair`/`cold_contact`+`structural_phishing_score`/`weak_pair`=`is_sms_initiated_unreg`+`repeat_pressure_intensity`)을 한 번에 비교할 수 있도록 확장됨 — 4개 중 어떤 feature가 실제 효과를 내는지 더 세분화해서 보고 싶을 때 사용(아직 이 세분화 버전은 실행 전).
+**참고**: `run_stability_check()`는 이후 `feature_sets` 인자로 여러 조합(`ABLATION_STABILITY_FEATURE_SETS`의 `all4`/`strong_pair`=`cold_contact`+`structural_phishing_score`/`weak_pair`=`is_sms_initiated_unreg`+`repeat_pressure_intensity`)을 한 번에 비교할 수 있도록 확장됨. 이 세분화 버전도 K=10으로 실행 완료(2026-09-19) — `strong_pair`만으로 `all4`의 긍정적 움직임(f1/precision 상승)을 거의 그대로 재현했고, `weak_pair`는 f1/PR-AUC diff가 정확히 0으로 사실상 기여가 없었음. 다만 세 조합 모두 baseline과 통계적으로 구별되지 않는 노이즈 범위였으므로, **4개를 그대로 유지하기로 최종 결정**(줄일 근거는 있지만 줄여야 할 이유도 없음).
 
-**검증 -> 실제 파이프라인에 반영하는 방법**:
-- 검증 진행 후에는 `schema_columns.py`의 `SCHEMA`에 미등록된 상태 -> 직접 등록하는 과정이 필요함.
-- 실제 반영하려면: ① SCHEMA에 위 4개 `ColumnSchema` 등록 → ② `generate_final_dataset()`에 파생 feature 계산 연결 → ③ `main.py::DATASET_GEN_VERSION`을 1→2로 올려서 캐시 무효화 → ④ `-m generate`(또는 `-m final`) 재실행
-- (선택) `-m ablation_stability`는 baseline 대비 성능 차이 자체가 노이즈인지 K-Fold로 재검증하는 별도 도구. 위 4개 선정 자체는 반복 재실행으로 이미 안정성이 확인됐으므로 필수는 아니고, 필요시 추가 확인용으로 사용 가능.
+**실제 파이프라인 반영 완료 (2026-09-19)**:
+- ① `schema_columns.py`의 `SCHEMA`에 위 4개 `ColumnSchema` 등록(`ValueType.CONTINUOUS_SCORE`를 `schema.py`에 신규 추가해서 `repeat_pressure_intensity`에 사용). SCHEMA 총 23→27개, `get_feature_columns()` 21→25개.
+- ② `main.py::generate_final_dataset()`에서 `build_dataset()` 직후 `add_candidate_features()` 호출 → `get_schema_column_names()`(+`is_phishing`/`incident_type`) 기준으로 필터링해서 미확정 9개 후보는 자동 제외하고 저장.
+- ③ `main.py::DATASET_GEN_VERSION`을 1→2로 올려 기존 캐시 무효화.
+- ④ `-m generate`/`-m final` 실제 실행 완료 — `DataSet/final_dataset.*` shape=(100000, 29)(원본 21+파생 4+비feature 2+라벨 2), 4개 파생 feature 전부 결측 0건으로 확인.
+- **부수 수정**: `get_feature_columns()`가 이제 파생 4개를 포함하므로, `build_dataset()` 결과만으로 바로 `get_feature_columns()`를 쓰던 `sensitivity_analysis.py::run_sensitivity()`/`run_stress_sensitivity()`에도 `add_candidate_features()` 호출을 추가(안 하면 파생 컬럼이 없어 KeyError). `feature_ablation.py::CANDIDATE_DERIVED_FEATURES`에서도 확정된 4개를 제거(9개만 남음) — 안 그러면 이제 `get_feature_columns()`(=`baseline_cols`)에 이미 포함된 4개가 `full_cols`에서 중복 선택됨.
+- (선택) `-m ablation_stability`는 baseline 대비 성능 차이 자체가 노이즈인지 K-Fold로 재검증하는 별도 도구로 계속 사용 가능(위에서 이미 실행 완료).
 
 ---
 

@@ -10,6 +10,7 @@ from sklearn.model_selection import StratifiedKFold
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.schema_utils import get_feature_columns
 from Simulator.Detection.train_eval import train_model, evaluate, prepare_categorical
+from Simulator.Detection.derived_features import add_candidate_features
 
 # 결과 저장 폴더: 실행 위치(cwd)와 무관하게 항상 프로젝트 루트 기준으로 고정.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -122,6 +123,9 @@ def run_sensitivity(
                 sophistication={"__base__": base_soph, param_name: value},
             )
 
+        # SCHEMA에 확정 등록된 파생 feature 4개가 get_feature_columns()에 포함되므로, df에도
+        # 실제로 그 컬럼들이 있어야 함 -> K-Fold로 나뉘기 전에 미리 계산해서 추가.
+        df = add_candidate_features(df)
         df = prepare_categorical(df)  # K-Fold로 나뉘기 전에 category dtype 한 번만 확정
         X = df[get_feature_columns()] # 학습에 사용할 feature columns 관련 데이터만 추출.
         y = df["is_phishing"] # label column.
@@ -214,6 +218,9 @@ def run_stress_sensitivity(
             )
 
         # override는 build_dataset 동안에만 필요. 학습은 생성된 df만 사용.
+        # SCHEMA에 확정 등록된 파생 feature 4개가 get_feature_columns()에 포함되므로, df에도
+        # 실제로 그 컬럼들이 있어야 함 -> K-Fold로 나뉘기 전에 미리 계산해서 추가.
+        df = add_candidate_features(df)
         df = prepare_categorical(df)
         X = df[get_feature_columns()]
         y = df["is_phishing"]

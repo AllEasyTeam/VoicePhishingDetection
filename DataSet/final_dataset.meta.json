@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "n": 100000,
   "gen_seed": 42,
   "subgroup_ratio_key": "D",

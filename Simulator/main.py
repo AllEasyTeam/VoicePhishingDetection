@@ -15,8 +15,9 @@ from Simulator.Detection.feature_ablation import (
     FINAL_CANDIDATE_FEATURES,
 )
 from Simulator.Detection.optuna_apply import run_optuna_tuning_and_compare
+from Simulator.Detection.derived_features import add_candidate_features
 from Simulator.schema import Track
-from Simulator.schema_utils import get_feature_columns
+from Simulator.schema_utils import get_feature_columns, get_schema_column_names
 
 # 최종 dataset 저장 폴더: 실행 위치(cwd)와 무관하게 항상 프로젝트 루트 기준으로 고정.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -32,9 +33,9 @@ GEN_SEED = 42              # build_dataset()용 random_state
 # DataSet/final_dataset 캐시 무효화용 버전. N/GEN_SEED/SUBGROUP_RATIO_KEY/FINAL_SOPHISTICATION은
 # 바뀌면 자동으로 감지되지만(fingerprint 비교), "생성 로직 자체"가 바뀌는 경우(코드는 바뀌었는데
 # 위 파라미터 값은 그대로인 경우)는 자동으로 감지가 안 되므로, 그럴 때 이 숫자를 수동으로 올려야 dataset을 재사용하지 않고 강제로 다시 생성함.
-# TODO: 파생 feature ablation 검증 후에, add_candidate_features()를 generate_final_dataset()에
-#       연결하게 되면, 그 시점에 이 값을 1 -> 2로 수정해야 함.(그래야 기존 dataset이 재사용되지 않고 파생 feature 포함 버전으로 다시 생성됨).
-DATASET_GEN_VERSION = 1
+# 2026-09-19: add_candidate_features()를 generate_final_dataset()에 연결(파생 feature 4개 포함)
+#             하면서 1 -> 2로 올림 -> 기존(파생 feature 미포함) 캐시가 재사용되지 않고 새로 생성됨.
+DATASET_GEN_VERSION = 2
 
 # 최종 dataset 생성 시 각 feature에 적용할 sophistication. 
 # 민감도 분석(필요 시 K=10/stress 모드로 재검증까지 거쳐) 결과로 확정한 값.
@@ -186,9 +187,14 @@ def generate_final_dataset():
         config=config,
         sophistication=FINAL_SOPHISTICATION,
     )
+    df = add_candidate_features(df)  # 파생 feature 13개 후보 전부 계산 (원본 23개 + 파생 13개 + 라벨 2개 = 38개 column)
+
+    # SCHEMA에 이름이 등록되어 있는 column 전부 반환(원본 23개 + 파생 4개 = 27개) + 라벨 별도로 추가(SCHEMA에 없으므로)
+    keep_cols = get_schema_column_names() + ["is_phishing", "incident_type"]
+
+    # kepp_cols 사용해서 df의 38개 column 중 29개만 걸러짐. (나머지는 이때 모두 자동으로 걸러짐)
+    df = df[[c for c in keep_cols if c in df.columns]]
     save_final_dataset(df)  # Detection 쪽 가공(category 변환/분할) 전, 생성 직후의 원본을 저장
-    # 파생 feature 13개는 전부 ablation 검증 대기 중이라 여기서는 아직 추가하지 않음
-    # 검증 끝나고 여기에 연결하게 되면 DATASET_GEN_VERSION을 올려서 기존 캐시를 무효화할 것.
     return df
 
 
