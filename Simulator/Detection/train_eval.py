@@ -56,13 +56,11 @@ def split_data(df):
 
 
 def pr_auc(y, proba):
-    # Precision-Recall AUC.
-    return float(average_precision_score(y, proba))
-    # 민감도 분석에서 사용한 pr-auc는 precision_recall_curve
-    ## 민감도 분석의 경우에는 상대적인 우열을 가려내는 것이기에 "precsion_recall_curve"가 유효
-    ## 최종 모델 평가에서는 정대적인 수치가 중요하기에 precsion_recall_curve"f로 바꿈.
-    #p, r, _ = precision_recall_curve(y, proba)
-    # return float(auc(r, p))
+    # Precision-Recall AUC (사다리꼴 적분, precision_recall_curve 기반).
+    # evaluate()의 기본값(pr_auc_method="trapezoidal")이 이 함수를 씀 -> 민감도 분석
+    # (sensitivity_analysis.py)이 여기 해당. "상대적 우열"만 가리면 되는 비교라 사다리꼴 방식으로도 충분하다고 판단.
+    p, r, _ = precision_recall_curve(y, proba)
+    return float(auc(r, p))
 
 
 def lift_at_top_k(y, proba, k=0.05):
@@ -173,11 +171,17 @@ def train_model(df, val=None, feature_cols=None, hyperparams=None, model_type="X
     return model
 
 
-def evaluate(model, df, feature_cols=None, threshold_df=None):
+def evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="trapezoidal"):
     # 평가를 위한 함수.
     # accuracy / precision / recall / F1 / confusion_matrix / feature importance 반환.
     # feature_cols: train_model()과 동일한 컬럼 목록을 넘겨야 함(Track 시나리오 일치 필요).
     # threshold_df: threshold 탐색용 데이터(보통 train). None이면 df에서 탐색(낙관 편향 가능).
+    # pr_auc_method: "trapezoidal"(기본, pr_auc()=precision_recall_curve+auc 사다리꼴 적분) 또는
+    #                "average_precision"(average_precision_score, 직선 보간이 없어 모델/조합 간 비교에 더 적합).
+    #                기본값은 sensitivity_analysis.py(상대적 우열 비교)를 그대로 둔 채, feature_ablation.py의
+    #                파생 feature 비교와 main.py::run_final()의 최종 모델 비교에서만 "average_precision"을 명시.
+    if pr_auc_method not in ("trapezoidal", "average_precision"):
+        raise ValueError(f"알 수 없는 pr_auc_method: {pr_auc_method!r}. 'trapezoidal' 또는 'average_precision'이어야 함.")
     feature_cols = _resolve_feature_cols(feature_cols)
 
     # train_model()과 동일하게, 실제 category dtype 변환은 prepare_categorical()이 분할 전에
@@ -239,7 +243,7 @@ def evaluate(model, df, feature_cols=None, threshold_df=None):
         # feature명 → 중요도. XGBoost 기본(gain 기반) importance
         "feature_importance": dict(zip(feature_cols, model.feature_importances_)),
         # PR-AUC: precision-recall auc로 베이스라인 대비 압도적으로 높다는 것을 보임()
-        "PR-AUC": pr_auc(y, proba),
+        "PR-AUC": pr_auc(y, proba) if pr_auc_method == "trapezoidal" else float(average_precision_score(y, proba)),
         # Top-K : 상위층에서 흔들림 없이 잘 잡아주는지.
         "Lift@Top5%": lift_5p,
         "Lift@Top10%": lift_10p,

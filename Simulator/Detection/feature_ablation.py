@@ -233,14 +233,16 @@ def run_feature_selection_pipeline(
 
     # --- 1단계 : baseline vs full 
     # 5. 모델 학습 #1 — baseline_model: train_set 전체를 "원본 feature만"(baseline_cols)으로 학습
+    # pr_auc_method="average_precision": baseline/full/final 모델끼리 비교하는 게 목적이라,
+    # 직선 보간 편향이 없는 average_precision_score를 씀(민감도 분석과는 다른 기준).
     baseline_model = train_model(train_set, feature_cols=baseline_cols)
-    baseline_metrics = evaluate(baseline_model, test_set, feature_cols=baseline_cols, threshold_df=train_set)
+    baseline_metrics = evaluate(baseline_model, test_set, feature_cols=baseline_cols, threshold_df=train_set, pr_auc_method="average_precision")
 
     # 6. 모델 학습 #2 — full_model: train_set 전체를 "원본+파생 13개 전부"(full_cols)로 학습
     full_model = train_model(train_set, feature_cols=full_cols)
 
     # 7. 둘 다 test_set으로 평가 -> baseline_metrics vs full_metrics 비교표 산출 ("기본 feature vs 파생 feature 포함 모델" 성능 차이 확인 가능.)
-    full_metrics = evaluate(full_model, test_set, feature_cols=full_cols, threshold_df=train_set)
+    full_metrics = evaluate(full_model, test_set, feature_cols=full_cols, threshold_df=train_set, pr_auc_method="average_precision")
 
     # --- 2단계 : 다중공선성 점검(제거) + 데이터 누수 점검
     # 8. 다중공선성 점검 및 제거
@@ -282,7 +284,7 @@ def run_feature_selection_pipeline(
     final_model = train_model(train_set, feature_cols=final_cols)
 
     # 15. test_set으로 최종 평가 -> 이게 진짜 "이 feature 조합으로 나온 최종 성능"
-    final_metrics = evaluate(final_model, test_set, feature_cols=final_cols, threshold_df=train_set)
+    final_metrics = evaluate(final_model, test_set, feature_cols=final_cols, threshold_df=train_set, pr_auc_method="average_precision")
 
     payload = {
         "kind": "feature_selection_pipeline",
@@ -391,14 +393,16 @@ def run_stability_check(
         val_fold = df.iloc[val_idx]
 
         # threshold는 train_fold에서 고르고 val_fold에 고정 적용 (run_sensitivity()와 동일한 낙관 편향 방지 방식).
+        # pr_auc_method="average_precision": baseline vs 조합끼리 비교하는 게 목적이라 민감도 분석과는
+        # 다른 기준(직선 보간 편향 없는 average_precision_score)을 씀.
         baseline_model = train_model(train_fold, feature_cols=baseline_cols)
-        baseline_folds.append(evaluate(baseline_model, val_fold, feature_cols=baseline_cols, threshold_df=train_fold))
+        baseline_folds.append(evaluate(baseline_model, val_fold, feature_cols=baseline_cols, threshold_df=train_fold, pr_auc_method="average_precision"))
 
         # 같은 fold(train_fold/val_fold) 안에서 조합별 모델도 함께 학습·평가 -> baseline과 동일한
         # 분할을 공유해야 diff 비교가 공정함(조합마다 다른 fold를 쓰면 fold 차이가 diff에 섞여 들어감).
         for name, cols in combo_cols.items():
             model = train_model(train_fold, feature_cols=cols)
-            combo_folds[name].append(evaluate(model, val_fold, feature_cols=cols, threshold_df=train_fold))
+            combo_folds[name].append(evaluate(model, val_fold, feature_cols=cols, threshold_df=train_fold, pr_auc_method="average_precision"))
 
     baseline_summary = summarize_fold_results(baseline_folds)
 

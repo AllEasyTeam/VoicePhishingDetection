@@ -236,8 +236,10 @@ def run_final():
         cols = get_feature_columns(track_filter=tracks)
         model = train_model(train_set, feature_cols=cols, hyperparams=tuned_hyperparams, model_type=model_type)
         # threshold는 train에서 고르고, 점수는 test에 고정 적용 (낙관 편향 방지)
+        # pr_auc_method="average_precision": Track B/C 최종 모델 비교이므로 직선 보간 편향이 없는
+        # average_precision_score를 씀(sensitivity_analysis.py의 상대적 우열 비교와는 다른 기준).
         results[scenario_name] = evaluate(
-            model, test_set, feature_cols=cols, threshold_df=train_set
+            model, test_set, feature_cols=cols, threshold_df=train_set, pr_auc_method="average_precision"
         )
     return results
 
