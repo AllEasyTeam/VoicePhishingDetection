@@ -18,11 +18,15 @@
     ├── schema_columns.py
     ├── schema_utils.py              
     ├── Generation/
-    │   ├── config.py            
+    │   ├── config.py  
+    |   ├── generator_utils.py          
     │   ├── normal_generator.py  
     │   ├── phishing_generator.py  
     │   └── dataset_builder.py    
     └── Detection/
+        ├── derived_features.py
+        ├── feature_ablation.py
+        ├── optuna_apply.py
         ├── train_eval.py         
         └── sensitivity_analysis.py 
 ```
@@ -47,90 +51,217 @@
 
 역할: 전체 파이프라인의 진입점. Generation과 Detection을 순서대로 호출하는 최상위 스크립트.
 
-하는 일 (예정):
+하는 일:
+- generate 모드: 확정한 값으로 최종 dataset만 생성해서 `DataSet/`에 저장(학습/평가 없음). 저장된 dataset이 있고 파라미터가 그대로면 재사용(캐싱), 다르면 재생성.
+- 최종 모드: 팀이 확정한 값으로 데이터셋 확보(위 캐싱 로직 재사용) → 학습 → 최종 성능 출력
 - 민감도분석 모드: `sensitivity_analysis.py`를 호출해서, config.py의 각 파라미터를 하나씩 바꿔가며 여러 데이터셋 생성 → 학습 → 결과 비교표 출력
-- 최종 모드: 팀이 확정한 값으로 데이터셋 1개 생성 → 학습 → 최종 성능 출력
+- ablation 모드 : 파생 feature 검증 및 최종 후보 확정을 위한 pipeline 실행.
+- tune 모드 : Optuna로 XGBoost/LightGBM 둘 다 하이퍼파라미터 탐색 후 val PR-AUC 더 높은 쪽(winner)을 선택
 
 주의: `main.py`는 `Generation/config.py`를 직접 import해도 됨(생성 단계를 총괄 지휘하는 역할이기 때문). 문제가 되는 건 `Detection/` 내부 코드가 config를 보는 것이므로 `main.py`에서는 고려하지 않아도 됨.
 
+
+주요 함수:
+- `_dataset_fingerprint()`: 현재 생성 파라미터+`DATASET_GEN_VERSION`을 해시해서, 저장된 dataset을 재사용해도 되는지 판단하는 지문 생성.
+- `save_final_dataset(df, out_dir)`: `DataSet/`에 csv/parquet과 `.meta.json`(지문 포함) 저장.
+- `generate_final_dataset()`: `build_dataset()` 호출해서 새로 dataset 생성.
+- `get_or_generate_final_dataset()`: 저장된 dataset의 지문이 현재와 같으면 재사용, 다르면 `generate_final_dataset()` 재호출(캐싱 로직 본체).
+- `run_final()`: dataset 확보 → `load_tuned_hyperparams()`로 tune 결과 있으면 반영 → `train_model()`/`evaluate()` → 최종 성능 출력.
+- `run_sensitivity_mode()`/`run_sensitivity_ratio_mode()`/`run_sensitivity_each_feature_mode()`/`run_stress_mode()`: 각각 `sensitivity_analysis.py`의 `run_sensitivity()`/`run_stress_sensitivity()`를 다른 파라미터 조합으로 호출.
+- `run_ablation_mode()`: `feature_ablation.py::run_feature_selection_pipeline()` 호출
+- `load_tuned_hyperparams(out_dir)`: `optuna_results/best_params.json`이 있으면 읽어서 `(model_type, hyperparams)` 반환, 없으면 `(None, None)`.
+- `run_tuning_mode()`: `optuna_apply.py::run_optuna_tuning_and_compare()` 호출 후 결과 저장.
+
 ---
 
-### 'Simulator/schema.py
+### `Simulator/schema.py`
 
 역할: Dataset의 column 정의를 위한 class 선언 파일.
 
 ---
 
-### 'Simulator/schema_columns.py
+### `Simulator/schema_columns.py`
 
-역할: 실제 Dataset에 필요한 column 목록을 생성하는 파일.
+역할: 실제 Dataset에 필요한 column 목록을 생성하는 파일. 컬럼 추가/수정 시 이 파일만 건드리면 됨.
 
----
-
-### 'Simulator/schema_utils.py
-
-역할: 다른 file에서 schema 관련 함수를 사용할 수 있도록 관련 함수를 정의한 파일.
+- `SCHEMA: list[ColumnSchema]`: 실제 컬럼 23개 정의(2026-09 기준). `phone_number`/`call_time` 2개만 `is_feature=False`(학습 제외 — phone_number는 통째로 암기 위험, call_time은 hour_bucket과 중복 방지), 나머지 21개가 실제 학습 feature.
+- 파일 하단 주석: `derived_features.py`의 13개 파생 feature 후보는 ablation 검증 대기 중이라 아직 `SCHEMA`에 미등록.
 
 ---
 
-### `Generation/config.py` 
+### `Simulator/schema_utils.py`
+
+역할: 다른 file에서 schema 관련 함수를 사용할 수 있도록 관련 함수를 정의한 파일. 전부 `SCHEMA`를 조회만 함(값 변경 없음).
+
+- `get_feature_columns(track_filter=None)`: `is_feature=True`인 컬럼명만 반환. `track_filter`로 특정 Track만 필터링 가능.
+- `get_schema_column_names()`: `SCHEMA` 선언 순서 그대로 전체 컬럼명 반환.
+- `get_non_feature_columns()`: `is_feature=False`인 컬럼명만 반환(phone_number, call_time). `train_model()`/`evaluate()`가 "SCHEMA 등록 여부"가 아니라 "is_feature=False만 차단"하도록 만들어서, 아직 SCHEMA 미등록인 파생 feature 후보도 학습에 쓸 수 있게 하는 용도.
+- `get_nullable_columns()`/`get_non_nullable_columns()`: `nullable=True`/`False`인 컬럼명 반환.
+- `validate_schema()`: SCHEMA 전체 자체 모순 검사(컬럼명 중복, 각 컬럼의 `validate()` 결과, `Track.ID` 컬럼이 정확히 1개인지, ID 컬럼이 `is_feature=True`로 잘못 설정되지 않았는지).
+
+---
+
+### `Generation/config.py`
 
 역할: 마스터표에서 확정한 정상값, 피싱값 전체를 담는 설정 파일. 코드가 아닌 값들의 저장소 역할.
 
+- 유형/하위집단 상수: `LOAN`/`INSTITUTION`/`ACQUAINTANCE`/`ETC`(피싱 4유형), `SUBGROUP_ACQUAINTANCE`/`SUBGROUP_INSTITUTION_PERSONAL`/`SUBGROUP_INSTITUTION_CORPORATE` 등(정상 하위집단).
+- `SOPH_*` 상수 11개(`SOPH_NUMBER_TYPE_BAND`, `SOPH_FIRST_CONTACT`, `SOPH_REPEAT_GAP` 등): feature별로 sophistication(low/mid/high)을 개별 조회할 때 쓰는 key 이름들. `generator_utils.get_soph()`가 이 key로 딕셔너리를 찾음.
+- `normalize(number)`/`classify_number_type(number)`: 전화번호 문자열을 정규화하고, 010/070/특번/02/00X(국제) 등 카테고리로 분류하는 함수.
+- `WHITELIST_NUMS`/`WHITELIST_SET`/`WHITELIST_LIST`: 기관 정상 이벤트에서 우선 사용하는 실존 대표번호 화이트리스트.
+- `CLASS_IMBALANCE = 0.01`: 전체 dataset의 피싱 비율(클래스 불균형).
+- `TYPE_RATIO`: 피싱 4유형 간 비중. `RELATION_TYPE_RATIO`(A~E): 정상 이벤트 지인:기관 하위집단 비중 키(민감도분석 대상, 현재 D로 확정).
+- `NORMAL_*`/`PHISHING_*` 쌍으로 된 다수의 확률·분포 dict(`*_IS_URL_IN_MSG`, `*_REPEAT_GAP`, `*_SMS_TO_CALL` 등): 각 feature마다 정상값/피싱값을 sophistication(low/mid/high)별로 담음. `normal_generator.py`/`phishing_generator.py`가 이 값들을 읽어서 이벤트를 합성.
+- `STRESS_*_KEY`/`STRESS_*_LEVELS`(예: `STRESS_URL_RATE_KEY`/`STRESS_URL_RATE_LEVELS`): 스트레스테스트(`main.py -m stress`) 모드에서 특정 feature 값을 극단으로 밀어붙일 때 쓰는 레벨 정의.
+
 ---
 
-### `Generation/normal_generator.py` 
+### `Generation/normal_generator.py`
 
 역할: 정상 이벤트 1건을 생성하는 함수를 담는 파일.
 
-만들 함수 (예정): `generate_normal_event(subgroup, config)`
-- Algorithm1의 9~10번 줄(하위집단 지인/기관 결정 → 그 규칙으로 이벤트 생성)에 대응
-- `config.py`의 F그룹(예외율), 개인기업_비중_후보 등을 참조
-- **[보류] 항목(재발신/재연락 등)은 팀 논의 끝나기 전까지 이 함수에서 빈 값(NaN)이나 placeholder로 처리해야 함**
+- `_group_key(subgroup, config)`: `기관_개인`/`기관_기업`을 `SUBGROUP_INSTITUTION`으로 묶는 내부 helper.
+- `_generate_normal_phone(subgroup, config, soph)`: 지인이면 010 고정, 기관이면 화이트리스트 우선(85%) 또는 `NORMAL_NUMBER_TYPE` 비중으로 합성.
+- `_calculate_repeat_gap(group_key, config, sophistication)`: `NORMAL_REPEAT_GAP` 혼합분포(지수분포, theta 랜덤 선택)로 재연락 간격 계산.
+- `generate_normal_event(subgroup, config, sophistication="mid")`: 메인 함수. 위 helper들과 `config`의 각 `NORMAL_*` 값을 조합해 이벤트 dict 1건(23개 원본 컬럼 중 `is_phishing`/`incident_type` 제외 21개) 생성. 결측 규칙(규칙 1: 선행 조건 미충족 시 NaN)을 `if/else`로 직접 구현.
 
 ---
 
-### `Generation/phishing_generator.py` 
+### `Generation/phishing_generator.py`
 
 역할: 피싱 이벤트 1건을 생성하는 함수를 담는 파일.
 
-만들 함수 (예정): `generate_phishing_event(type, sophistication, config)`
-- Algorithm1의 5~7번 줄(유형선택 → 값-옵션선택 → 생성)에 대응
-- `config.py`의 `TYPE_RATIO`, `SMS_TO_CALL_GAP` 등을 참조
-- **(A)/(B) 논의사항에서 (B)로 최종 결정될 경우에만, 유형(대출/기관/지인사칭/협박)별로 다른 θ값을 적용하는 분기 로직이 들어감. (A)로 결정되면 이 함수 구조가 달라져야 함 — 팀 논의 후 재작성 필요**
+- `_pick_from_call_band(config, soph)`: `PHISHING_CALL_NUMBER_TYPE` 비중으로 발신번호 카테고리를 뽑는 내부 helper.
+- `_generate_phishing_phone(p_type, first_contact_type, sophistication, config)`: 문자 개시면 `PHISHING_SMS_NUMBER_TYPE`, 아니면(또는 유형에 문자 전용 분포가 없으면) `_pick_from_call_band()` 차용.
+- `generate_phishing_event(p_type, sophistication, config)`: 메인 함수. `normal_generator.generate_normal_event()`와 동일한 구조로 피싱 유형별 `PHISHING_*` 값을 조합해 이벤트 dict 1건 생성. `hour_bucket`은 ETC 유형만 NaN(표본 부족), Track A(`is_carrier_altered`/`number_cluster`/`using_duration`/`unique_callees`)는 항상 NaN.
 
 ---
 
-### `Generation/dataset_builder.py` 
+### `Generation/dataset_builder.py`
 
 역할: `normal_generator`와 `phishing_generator`를 실제로 n번 호출해서, 완성된 데이터셋(표) 하나를 만드는 파일. Algorithm1 전체를 구현하는 곳.
 
-만들 함수 (예정): `build_dataset(n, phishing_rate, config)`
-- Algorithm1의 1~18번 줄 전체(for문, if/else 분기, 라벨링)를 그대로 코드로 옮김
-- 반환값: pandas DataFrame (사건ID, feature 15~19개, 피싱여부 라벨, 유형라벨)
+- `build_dataset(n, phishing_rate, config, sophistication="mid", subgroup_ratio_key="B", random_state=None)`: Algorithm1을 1:1로 구현. 사건마다 `random.random() < phishing_rate`로 피싱/정상 독립 결정 → 피싱이면 `generate_phishing_event()`, 정상이면 `generate_normal_event()` 호출 → `is_phishing`/`incident_type` 컬럼 추가 → 전체를 DataFrame으로 만들고 컬럼 순서를 `get_schema_column_names()` 기준으로 고정 → `sample(frac=1.0)`으로 셔플 후 반환.
+- `validate_check_dataset(df, preview_sample_size=10)`: 생성된 dataset의 결측 규칙 4가지(선행 조건 미충족 시 NaN, `get_non_nullable_columns()` 전체 결측 0건, Track A 컬럼 전부 NaN, `is_sequential_callers` 확정적 0/1)를 실제로 재검증하고 PASS/FAIL 리포트 출력. `schema.py`의 `depends_on`은 사람이 읽는 텍스트라 자동 검증이 안 되므로 여기서 조건을 직접 재현해서 검사.
 
 ---
 
-### `Detection/train_eval.py` 
+### `Generation/generator_utils.py`
+
+역할: `normal_generator.py`와 `phishing_generator.py`가 공유하는 함수 선언 파일.
+
+- `AREA_CODES`: 지방 유선 국번 목록(번호 합성용). `SOPH_ALIAS`: sophistication 구 한글키(`짧게`/`중간`/`길게` 등) 호환용 별칭 dict.
+- `get_soph(soph, key)`: sophistication 값이 문자열이면 그대로, dict이면 `key` 우선 → 없으면 `__base__` → 그래도 없으면 `mid`로 확정. 두 generator의 모든 확률 조회가 이 함수를 거침.
+- `digits(n)`: n자리 임의 숫자 문자열 생성.
+- `phone_from_category(category)`: `config.classify_number_type()`의 카테고리(010/특번/02/070/00X/기타)에 맞는 형식으로 전화번호 문자열 합성.
+
+---
+
+### `Detection/train_eval.py`
 
 역할: 데이터셋 하나를 받아서, 분할→학습→평가까지 한 번에 처리하는 파일.
 
-만들 함수 (예정):
-- `split_data(df)` — 층화(stratify) 방식으로 학습/검증/테스트 분할
-- `train_model(train, val)` — 트리기반 모델(XGBoost 등) 학습
-- `evaluate(model, test)` — accuracy/precision/recall/F1/feature importance 반환
+- `prepare_categorical(df)`: 범주형 컬럼을 pandas `category` dtype으로 변환(XGBoost `enable_categorical=True`/LightGBM 네이티브 범주형 처리에 필요).
+- `_resolve_feature_cols(feature_cols)`: `feature_cols`가 없으면 `get_non_feature_columns()` 기준으로 전체 컬럼에서 비-feature만 제외하고 반환(SCHEMA 미등록 파생 feature도 학습에 쓸 수 있게 하기 위함).
+- `split_data(df)`: train/val/test 분할.
+- `pr_auc(y, proba)`: PR-AUC(average_precision) 계산.
+- `lift_at_top_k(y, proba, k=0.05)`: 상위 k% Lift 계산.
+- `train_model(df, val=None, feature_cols=None, hyperparams=None, model_type="XGBoost")`: `model_type`에 따라 XGBoost/LightGBM 분기 학습. `hyperparams` 전달 시 Optuna tune 결과 반영.
+- `evaluate(model, df, feature_cols=None, threshold_df=None)`: 학습된 모델을 평가. `threshold_df`를 별도로 받아 "임계값 결정에 test_set을 쓰지 않는" 낙관 편향 방지 구조.
 
 **이 파일은 `Generation/config.py`를 import하지 않아야 함.** 
 
 ---
 
-### `Detection/sensitivity_analysis.py` 
+### `Detection/sensitivity_analysis.py`
 
 역할: config.py의 스윕 파라미터(짧게/중간/길게, 지인기관비중 A~E 등)를 하나씩 바꿔가며 `dataset_builder` + `train_eval`을 반복 실행하고, 결과를 비교표로 정리하는 파일.
 
-만들 함수 (예정): `run_sensitivity(param_name, candidate_values, fixed_config)`
-- "한 번에 하나씩만 바꾸고 나머지는 고정"이라는 원칙을 그대로 구현
-- 결과: 파라미터값별 성능 비교 DataFrame → 변동폭이 큰(취약한) 파라미터 식별용
+- `summarize_fold_results(fold_results)`: K번 반복 실행 결과(fold별 metric)를 평균/표준편차 등으로 요약.
+- `save_sensitivity_result(...)`: 결과를 `sensitivity_results/`에 json으로 저장.
+- `run_sensitivity(...)`: 파라미터 하나를 여러 값으로 바꿔가며 `build_dataset()`+`train_eval` 반복 실행(민감도분석 본체). `sen`/`each_sen`/`ratio` 모드가 공통으로 사용.
+- `_temporary_config_overrides(config_module, overrides)`: `config.py`의 특정 값을 일시적으로 덮어썼다가 복원하는 context manager(스윕 중 원본 config 오염 방지).
+- `run_stress_sensitivity(...)`: `STRESS_*_LEVELS`로 특정 feature 값을 극단으로 밀어붙이는 스트레스테스트(`stress` 모드) 실행.
+
+---
+
+### `Detection/derived_features.py` 
+
+역할: 파생 feature 후보 column을 기존 dataset에 추가하는 함수 선언.
+
+- `add_candidate_features(df)`: 원본 컬럼만으로 13개 파생 feature를 계산해서 `df`에 추가. 
+- 13개 모두 `schema_columns.py`의 `SCHEMA`에는 미등록(검증 이전) — `feature_ablation.py`의 ablation 검증을 통과한 것만 등록(최종 확정 목록은 아래 `feature_ablation.py` 섹션 참고).
+
+---
+
+### `Detection/feature_ablation.py` 
+
+역할: 파생 feature 검증 pipeline
+
+선언된 함수/상수:
+- `CANDIDATE_DERIVED_FEATURES`: `derived_features.py`가 만드는 13개 후보 이름 목록.
+- `DEFAULT_MULTICOLLINEARITY_THRESHOLD=0.8`/`DEFAULT_LEAKAGE_THRESHOLD=0.95`/`DEFAULT_VAL_SIZE=0.2`/`DEFAULT_PERM_N_REPEATS=10`: 각 단계 기본 임계값·비율.
+- `_select_by_correlation(train_df, candidate_features, target_col, threshold)`: 2단계 다중공선성 제거(후보끼리 상관계수 threshold 초과 쌍 중 하나 drop).
+- `_check_leakage(train_df, candidate_features, target_col, threshold)`: 2단계 데이터 누수 플래그(후보-target 상관계수만 검사, 자동 제거는 안 함).
+- `_patch_shap_xgboost_base_score_bug()`: shap/xgboost 3.x `base_score` 문자열 파싱 버그 몽키패치.
+- `_compute_shap_importance(model, X)`: 3단계 SHAP 중요도 계산(참고용).
+- `_compute_permutation_importance(model, X_val, y_val, n_repeats, random_state)`: 3단계 Permutation Importance 계산(실제 가지치기 기준, `train_sub`/`val_sub` 분리해서 held-out 데이터로 검증).
+- `run_feature_selection_pipeline(...)`: 위 helper들을 묶어 0~4단계 전체를 실행하는 메인 함수.
+
+흐름:
+- 0단계 : 기본 작업
+- 1단계 : baseline vs full 비교
+- 2단계 : 다중공선성 검증, 데이터 누수 플래그
+- 3단계 : Embedded method + SHAP + Permutation Importance
+- 4단계 : 최종 재학습
+
+최종 산출물 : 검증 후 통과된 최종 파생 feature 목록으로 학습한 결과를 포함한 json 파일. (feature_selection_results/ 에 저장됨) 
+
+#### 파생 feature 최종 확정 목록 (2026-09-19, N=100,000 실행 기준)
+
+`derived_features.py`가 만드는 13개 후보 중, 다중공선성(3개 제거) → permutation importance(6개 추가 제거)를 거쳐 **4개만 최종 생존**했음.
+
+| column명 | 정의 | 값 형태 | Track | 결측 여부 |
+|---|---|---|---|---|
+| `structural_phishing_score` | 문자 구조적 위협 누적 지수(0~5점) | 이산형(정수, 0~5) | 단말+구조적신호(C) | 결측 없음(하위 조건 미발생분은 0점 처리) |
+| `is_sms_initiated_unreg` | 미등록 발신자의 문자 개시 여부 | 이진(0/1) | 단말(B) | 결측 없음 |
+| `cold_contact` | 완전 낯선 접촉 여부(미저장+이력 없음) | 이진(0/1) | 단말(B) | 결측 없음 |
+| `repeat_pressure_intensity` | 재연락 압박 강도(재연락 간격 기반 연속 점수) | 연속형(점수) | 단말(B) | 결측 없음(재연락 없으면 0.0) |
+
+**성능 비교**(test_set 기준): baseline(원본 21개) f1=0.978, PR-AUC=0.992 vs final(원본+위 4개, 25개) f1=0.978(동일), PR-AUC=0.989(소폭 하락). 뚜렷한 성능 향상은 아니지만 손해도 거의 없는 수준.
+
+**검증 -> 실제 파이프라인에 반영하는 방법**:
+- 검증 진행 후에는 `schema_columns.py`의 `SCHEMA`에 미등록된 상태 -> 직접 등록하는 과정이 필요함.
+- 실제 반영하려면: ① SCHEMA에 위 4개 `ColumnSchema` 등록 → ② `generate_final_dataset()`에 파생 feature 계산 연결 → ③ `main.py::DATASET_GEN_VERSION`을 1→2로 올려서 캐시 무효화 → ④ `-m generate`(또는 `-m final`) 재실행
+
+---
+
+### `Detection/optuna_apply.py` 
+
+역할: XGBoost/LightGBM 하이퍼파라미터를 Optuna로 탐색하고, 두 모델을 비교하는 파일.
+
+하는 일:
+- `create_objective()`: 모델 종류(XGBoost/LightGBM)별 Optuna 목적함수 생성. train_sub로 학습, val_sub의 PR-AUC(average_precision)를 최적화 대상으로 삼음.
+- `run_optuna_tuning()`: 모델 종류 1개에 대해 `study.optimize()` 실행 → 최적 하이퍼파라미터 + 확정 n_estimators 반환.
+- `run_optuna_tuning_and_compare()`: XGBoost/LightGBM 둘 다 탐색해서 val PR-AUC가 더 높은 쪽을 winner로 선택.
+
+최종 산출물: winner 모델 종류 + 하이퍼파라미터가 담긴 json 파일(`optuna_results/best_params.json`). `main.py::run_final()`이 다음 실행부터 이 파일을 자동으로 읽어서 반영함.
+
+**이 파일은 `Generation/config.py`를 import하지 않아야 함.**
+
+---
+
+
+## 결과물 저장 폴더
+
+코드를 실행하면 자동으로 생성되는 폴더들. 소스 코드가 아니라 실행 결과물임.
+
+| 폴더 | 저장 내용 | git 추적 여부 |
+|---|---|---|
+| `DataSet/` | 최종 dataset(`final_dataset.csv`/`.parquet`/`.meta.json`). `-m generate`/`-m final` 실행 시 생성. | 추적됨(커밋 대상) |
+| `sensitivity_results/` | 민감도분석 모드(`sen`/`each_sen`/`ratio`/`stress`) 결과 json. | `.gitignore` 처리(재실행하면 다시 생성되므로 커밋 대상 아님) |
+| `feature_selection_results/` | ablation 모드 결과 json(`feature_selection_pipeline.json`). | `.gitignore` 처리 |
+| `optuna_results/` | tune 모드 결과 json(`best_params.json` — winner 모델+하이퍼파라미터). | `.gitignore` 처리 |
 
 ---
 
@@ -145,12 +276,3 @@
 | 18 (반환) | `dataset_builder.py`의 리턴값 |
 
 ---
-
-## 제안 작업 순서
-
-1. `normal_generator.py`, `phishing_generator.py` 작성 (config.py의 `[확정]` 항목만 우선 반영, `[보류]`는 placeholder)
-2. `dataset_builder.py` 작성 — Algorithm1 그대로 구현, 소량(10~20건) 생성해서 눈으로 검증
-3. `train_eval.py` 작성 — 층화분할+RandomForest 학습
-4. `sensitivity_analysis.py` 작성
-5. `main.py`에서 전체 연결
-6. 팀 미결정 사항([보류] 항목들, (A)/(B) 결정) 회의 후 config.py 업데이트 → 위 순서 재실행
