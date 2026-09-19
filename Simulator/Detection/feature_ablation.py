@@ -27,6 +27,16 @@
 #
 # run_sensitivity()/run_stress_sensitivity()가 K-Fold로 "생성 파라미터"를 스윕하는 것과 달리,
 # 이건 dataset 1개를 고정 분할해서 "feature 선정" 자체를 진단하는 용도라 K-Fold를 쓰지 않음.
+# (다중공선성/누수/permutation importance 기준으로 "어떤 feature를 넣을지" 결정하는 과정 자체를
+#  K번 반복하면 반복마다 결정이 달라질 수 있어, "최종 조합이 무엇인가"라는 질문에 답할 수 없게 됨)
+#
+# run_stability_check() — [선정 이후] 사후 검증 전용 함수 (K-Fold 사용)
+#   위 선정 과정(run_feature_selection_pipeline())으로 "이미 확정된" feature 조합의 test 성능
+#   차이가 실제 효과인지, 단일 실행에서 나온 우연(노이즈)인지 확인하는 별도 함수.
+#   "무엇을 고를지"를 다시 정하는 게 아니라 "이미 고른 것이 fold가 바뀌어도 일관된가"만
+#   사후 확인하는 것이라, 위 원칙(선정 과정=1회 고정 분할)과 모순되지 않음.
+#   dataset은 동일하게 1개만 생성하고(재생성 X), run_sensitivity()와 동일하게
+#   StratifiedKFold로 나눈 K개 fold에서 baseline/final 모델을 반복 학습·평가함.
 import json
 from pathlib import Path
 from typing import Optional
@@ -35,20 +45,21 @@ import numpy as np
 import shap
 import shap.explainers._tree as _shap_tree_mod
 from sklearn.inspection import permutation_importance
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.schema_utils import get_feature_columns
 from Simulator.Detection.train_eval import train_model, evaluate, prepare_categorical, split_data
 from Simulator.Detection.derived_features import add_candidate_features
+from Simulator.Detection.sensitivity_analysis import summarize_fold_results
 
 # 결과 저장 폴더: 실행 위치(cwd)와 무관하게 항상 프로젝트 루트 기준으로 고정.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _RESULTS_DIR = _PROJECT_ROOT / "feature_selection_results"
+# run_stability_check() 결과 저장 폴더.
+_STABILITY_RESULTS_DIR = _PROJECT_ROOT / "feature_stability_results"
 
-# add_candidate_features()가 만드는 13개 파생 컬럼(Derived features)명 목록. 
-# 후보 목록들이라 get_feature_columns()에는 아직 없으므로 직접 나열해서 feature_cols 구성에 씀.
-# 추후, 검증 및 선정이 완료된 feature에 대해 schema에 추가하는 과정 진행.
+# add_candidate_features()가 만드는 13개의 후보 파생 컬럼(Derived features)명 목록. 
 CANDIDATE_DERIVED_FEATURES = [
     "cross_channel_urgency_score",
     "repeat_pressure_intensity",
@@ -69,6 +80,24 @@ DEFAULT_MULTICOLLINEARITY_THRESHOLD = 0.8  # 다중공선성(Multicollinearity) 
 DEFAULT_LEAKAGE_THRESHOLD = 0.95            # 데이터 누수(Data Leakage) 탐지하기 위해 사용하는 임계값.
 DEFAULT_VAL_SIZE = 0.2                      # train_set 중 permutation importance 검증용으로 사용할 데이터로 분리할 비율
 DEFAULT_PERM_N_REPEATS = 10                 # permutation importance 반복 횟수(우연에 따른 흔들림 줄이기 위해 반복 진행)
+
+# run_feature_selection_pipeline() 실행 결과(2026-09-19, N=100,000)로 확정된 최종 파생 feature 4개.
+# run_stability_check()가 별도 인자 없이 호출되면 이 목록을 기본 검증 대상으로 사용함.
+FINAL_CANDIDATE_FEATURES = [
+    "structural_phishing_score",
+    "is_sms_initiated_unreg",
+    "cold_contact",
+    "repeat_pressure_intensity",
+]
+
+DEFAULT_STABILITY_K = 10  # run_stability_check() 기본 K. 재검증 성격이라 민감도분석의 DEFAULT_K(5)보다 크게 잡음.
+
+
+def _metrics_summary(m):
+    """evaluate() 반환값에서 threshold/accuracy/precision/recall/f1/PR-AUC/Lift@Top5~20%만 추려서
+    저장용 요약 dict으로 만드는 함수. run_feature_selection_pipeline()과 run_stability_check()가 공유."""
+    return {k: m[k] for k in ("threshold", "accuracy", "precision", "recall", "f1", "PR-AUC",
+                               "Lift@Top5%", "Lift@Top10%", "Lift@Top20%")}
 
 
 def _select_by_correlation(train_df, candidate_features, target_col="is_phishing", threshold=0.8):
@@ -254,10 +283,6 @@ def run_feature_selection_pipeline(
     # 15. test_set으로 최종 평가 -> 이게 진짜 "이 feature 조합으로 나온 최종 성능"
     final_metrics = evaluate(final_model, test_set, feature_cols=final_cols, threshold_df=train_set)
 
-    def _metrics_summary(m):
-        return {k: m[k] for k in ("threshold", "accuracy", "precision", "recall", "f1", "PR-AUC",
-                                   "Lift@Top5%", "Lift@Top10%", "Lift@Top20%")}
-
     payload = {
         "kind": "feature_selection_pipeline",
         "n": n,
@@ -299,6 +324,90 @@ def run_feature_selection_pipeline(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "feature_selection_pipeline.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    return payload
+
+
+def _diff_summary(baseline_summary: dict, final_summary: dict) -> dict:
+    """final_summary - baseline_summary의 지표별 평균(mean) 차이만 따로 뽑아 요약.
+    양수면 final(파생 feature 포함)이 baseline보다 평균적으로 더 좋았다는 뜻, 음수면 더 나빴다는 뜻.
+    -> mean 차이가 baseline/final 각각의 sem(표준오차)보다 훨씬 작으면 "노이즈 범위 안"으로 판단 가능."""
+    return {
+        key: round(final_summary[key]["mean"] - baseline_summary[key]["mean"], 4)
+        for key in final_summary
+        if key in baseline_summary
+    }
+
+
+def run_stability_check(
+    fixed_config,                              # config.py 모듈. build_dataset()에 그대로 전달.
+    final_candidate_features=None,             # 검증할 파생 feature 조합. None이면 FINAL_CANDIDATE_FEATURES(4개) 사용.
+    k: int = DEFAULT_STABILITY_K,
+    n: int = 100000,                           # build_dataset()에 그대로 전달.
+    phishing_rate: Optional[float] = None,     # build_dataset()에 그대로 전달.
+    subgroup_ratio_key: str = "D",             # build_dataset()에 그대로 전달.
+    sophistication="mid",                      # build_dataset()에 전달되어 진행될 땐, FINAL_SOPHISTICATION이 사용됨.
+    gen_seed: int = 42,                        # build_dataset()용 random_state (dataset은 1회만 생성).
+    fold_seed: int = 7,                        # StratifiedKFold용 random_state. run_sensitivity()의 fold_seed와 동일한 역할.
+    out_dir: Path = _STABILITY_RESULTS_DIR,
+) -> dict:
+    """run_feature_selection_pipeline()으로 이미 확정된 파생 feature 조합(기본값: FINAL_CANDIDATE_FEATURES
+    4개)이 baseline 대비 보인 성능 차이가 "실제 효과"인지 "단일 실행에서 나온 우연(노이즈)"인지 확인하는
+    사후 검증 함수.
+    run_feature_selection_pipeline()과 달리 "무엇을 고를지"를 다시 결정하지 않고,
+    "이미 고른" 조합 하나만 대상으로 함 -> dataset은 동일하게 1개만 생성(재생성 X)하고,
+    StratifiedKFold로 나눈 K개 fold에서 baseline_model/final_model을 K번씩 반복 학습·평가해
+    mean/std/sem을 비교함(run_sensitivity()와 동일한 K-Fold 패턴)"""
+    final_candidate_features = final_candidate_features or FINAL_CANDIDATE_FEATURES
+
+    # dataset은 run_feature_selection_pipeline()과 동일하게 1회만 생성. split만 K번 바뀜.
+    df = build_dataset(
+        n, phishing_rate=phishing_rate, subgroup_ratio_key=subgroup_ratio_key,
+        random_state=gen_seed, config=fixed_config, sophistication=sophistication,
+    )
+    df = add_candidate_features(df)
+    df = prepare_categorical(df)
+
+    baseline_cols = get_feature_columns()
+    final_cols = baseline_cols + final_candidate_features
+
+    y = df["is_phishing"]
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=fold_seed)
+
+    # baseline_folds/final_folds: fold별 evaluate() 결과(K개씩)를 모으는 곳.
+    baseline_folds, final_folds = [], []
+    for train_idx, val_idx in skf.split(df, y):
+        train_fold = df.iloc[train_idx]
+        val_fold = df.iloc[val_idx]
+
+        # threshold는 train_fold에서 고르고 val_fold에 고정 적용 (run_sensitivity()와 동일한 낙관 편향 방지 방식).
+        baseline_model = train_model(train_fold, feature_cols=baseline_cols)
+        baseline_folds.append(evaluate(baseline_model, val_fold, feature_cols=baseline_cols, threshold_df=train_fold))
+
+        final_model = train_model(train_fold, feature_cols=final_cols)
+        final_folds.append(evaluate(final_model, val_fold, feature_cols=final_cols, threshold_df=train_fold))
+
+    baseline_summary = summarize_fold_results(baseline_folds)
+    final_summary = summarize_fold_results(final_folds)
+
+    payload = {
+        "kind": "feature_stability_check",
+        "k": k,
+        "n": n,
+        "final_candidate_features": final_candidate_features,
+        "baseline_feature_count": len(baseline_cols),
+        "final_feature_count": len(final_cols),
+        "baseline_summary": baseline_summary,
+        "final_summary": final_summary,
+        # final_summary - baseline_summary의 mean 차이만 따로 뽑은 요약. 음수면 final이 평균적으로
+        # 더 낮았다는 뜻이지만, sem(표준오차) 대비 작은 차이면 노이즈 범위로 봐야 함(자동 판정은 안 함).
+        "diff(final-baseline, mean 기준)": _diff_summary(baseline_summary, final_summary),
+    }
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "feature_stability_check.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 

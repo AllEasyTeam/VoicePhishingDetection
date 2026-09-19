@@ -56,6 +56,7 @@
 - 최종 모드: 팀이 확정한 값으로 데이터셋 확보(위 캐싱 로직 재사용) → 학습 → 최종 성능 출력
 - 민감도분석 모드: `sensitivity_analysis.py`를 호출해서, config.py의 각 파라미터를 하나씩 바꿔가며 여러 데이터셋 생성 → 학습 → 결과 비교표 출력
 - ablation 모드 : 파생 feature 검증 및 최종 후보 확정을 위한 pipeline 실행.
+- ablation_stability 모드 : ablation 모드로 이미 확정된 최종 파생 feature 조합의 성능 차이가 노이즈인지 K-Fold로 재검증.
 - tune 모드 : Optuna로 XGBoost/LightGBM 둘 다 하이퍼파라미터 탐색 후 val PR-AUC 더 높은 쪽(winner)을 선택
 
 주의: `main.py`는 `Generation/config.py`를 직접 import해도 됨(생성 단계를 총괄 지휘하는 역할이기 때문). 문제가 되는 건 `Detection/` 내부 코드가 config를 보는 것이므로 `main.py`에서는 고려하지 않아도 됨.
@@ -69,6 +70,7 @@
 - `run_final()`: dataset 확보 → `load_tuned_hyperparams()`로 tune 결과 있으면 반영 → `train_model()`/`evaluate()` → 최종 성능 출력.
 - `run_sensitivity_mode()`/`run_sensitivity_ratio_mode()`/`run_sensitivity_each_feature_mode()`/`run_stress_mode()`: 각각 `sensitivity_analysis.py`의 `run_sensitivity()`/`run_stress_sensitivity()`를 다른 파라미터 조합으로 호출.
 - `run_ablation_mode()`: `feature_ablation.py::run_feature_selection_pipeline()` 호출
+- `run_ablation_stability_mode()`: `feature_ablation.py::run_stability_check()` 호출(`ABLATION_STABILITY_K`, `feature_ablation.FINAL_CANDIDATE_FEATURES` 사용).
 - `load_tuned_hyperparams(out_dir)`: `optuna_results/best_params.json`이 있으면 읽어서 `(model_type, hyperparams)` 반환, 없으면 `(None, None)`.
 - `run_tuning_mode()`: `optuna_apply.py::run_optuna_tuning_and_compare()` 호출 후 결과 저장.
 
@@ -196,19 +198,28 @@
 
 ### `Detection/feature_ablation.py` 
 
-역할: 파생 feature 검증 pipeline
+역할: 파생 feature 검증 pipeline (선정 1회 + 사후 K-Fold 재검증)
+
+이 파일은 목적이 다른 두 함수로 구성됨:
+- `run_feature_selection_pipeline()`: 13개 후보 중 "무엇을 최종으로 고를지" 결정하는 선정 과정. 반복하면 결정 자체가 흔들릴 수 있어 dataset 1개, train/test 고정 분할 1회로 진행(K-Fold 미사용).
+- `run_stability_check()`: 위에서 "이미 결정된" 최종 feature 조합의 성능 차이가 실제 효과인지 단일 실행의 우연(노이즈)인지 확인하는 사후 검증. "무엇을 고를지"를 다시 정하는 게 아니므로 `run_sensitivity()`와 동일한 StratifiedKFold(K-Fold) 방식을 써도 선정 과정의 1회 고정 분할 원칙과 모순되지 않음.
 
 선언된 함수/상수:
 - `CANDIDATE_DERIVED_FEATURES`: `derived_features.py`가 만드는 13개 후보 이름 목록.
-- `DEFAULT_MULTICOLLINEARITY_THRESHOLD=0.8`/`DEFAULT_LEAKAGE_THRESHOLD=0.95`/`DEFAULT_VAL_SIZE=0.2`/`DEFAULT_PERM_N_REPEATS=10`: 각 단계 기본 임계값·비율.
+- `FINAL_CANDIDATE_FEATURES`: `run_feature_selection_pipeline()` 실행(2026-09-19, N=100,000) 결과로 확정된 최종 4개(아래 표 참고). `run_stability_check()`의 기본 검증 대상.
+- `DEFAULT_MULTICOLLINEARITY_THRESHOLD=0.8`/`DEFAULT_LEAKAGE_THRESHOLD=0.95`/`DEFAULT_VAL_SIZE=0.2`/`DEFAULT_PERM_N_REPEATS=10`: 선정 파이프라인 각 단계 기본 임계값·비율.
+- `DEFAULT_STABILITY_K=10`: `run_stability_check()` 기본 K(민감도분석 기본값 5보다 크게 잡음 — 재검증 성격이라).
+- `_metrics_summary(m)`: `evaluate()` 결과에서 threshold/accuracy/precision/recall/f1/PR-AUC/Lift@Top5~20%만 추려 요약(두 함수가 공유).
 - `_select_by_correlation(train_df, candidate_features, target_col, threshold)`: 2단계 다중공선성 제거(후보끼리 상관계수 threshold 초과 쌍 중 하나 drop).
 - `_check_leakage(train_df, candidate_features, target_col, threshold)`: 2단계 데이터 누수 플래그(후보-target 상관계수만 검사, 자동 제거는 안 함).
 - `_patch_shap_xgboost_base_score_bug()`: shap/xgboost 3.x `base_score` 문자열 파싱 버그 몽키패치.
 - `_compute_shap_importance(model, X)`: 3단계 SHAP 중요도 계산(참고용).
 - `_compute_permutation_importance(model, X_val, y_val, n_repeats, random_state)`: 3단계 Permutation Importance 계산(실제 가지치기 기준, `train_sub`/`val_sub` 분리해서 held-out 데이터로 검증).
-- `run_feature_selection_pipeline(...)`: 위 helper들을 묶어 0~4단계 전체를 실행하는 메인 함수.
+- `run_feature_selection_pipeline(...)`: 위 helper들을 묶어 0~4단계 전체를 실행하는 선정 메인 함수.
+- `_diff_summary(baseline_summary, final_summary)`: `run_stability_check()`의 baseline/final summary에서 지표별 평균(mean) 차이만 뽑아 요약(양수=final이 평균적으로 더 좋음).
+- `run_stability_check(fixed_config, final_candidate_features=None, k=10, ...)`: dataset 1개만 생성 → `StratifiedKFold`로 K개 fold 분할 → baseline(21개)/final(21+최종후보) 두 모델을 fold마다 반복 학습·평가 → `sensitivity_analysis.summarize_fold_results()`로 mean/std/sem 집계 → `_diff_summary()`로 차이 요약.
 
-흐름:
+선정 파이프라인(`run_feature_selection_pipeline()`) 흐름:
 - 0단계 : 기본 작업
 - 1단계 : baseline vs full 비교
 - 2단계 : 다중공선성 검증, 데이터 누수 플래그
@@ -230,9 +241,20 @@
 
 **성능 비교**(test_set 기준): baseline(원본 21개) f1=0.978, PR-AUC=0.992 vs final(원본+위 4개, 25개) f1=0.978(동일), PR-AUC=0.989(소폭 하락). 뚜렷한 성능 향상은 아니지만 손해도 거의 없는 수준.
 
+#### `-m ablation` 재실행 시 결과가 달라지는 현상 (원인 확인 및 최종 결정, 2026-09-19)
+
+동일한 `config.py`/코드로 `-m ablation`을 다시 실행하면 `final_candidate_features`가 4개가 아니라 5~6개로 나올 때가 있음(`unreg_sender_with_url`, `suspicious_unreg_number_combo`가 추가로 포함됨). config.py 변경이나 코드 변경 때문이 아니라 **`train_eval.py::train_model()`이 쓰는 `tree_method="hist"`(히스토그램 기반, 멀티스레드) 특성 때문**임을 직접 재현해서 확인함:
+- 같은 Python 프로세스 안에서 동일 데이터로 두 번 학습 → 예측값 100% 완전 동일(결정론적).
+- 완전히 새 프로세스로 두 번 연속 실행(동일 config, 동일 코드) → PR-AUC 등 지표가 소수점 4~5자리 수준에서 미세하게 달라짐. `random_state=42` 고정으로도 이 정도의 부동소수점 비결정성까지는 못 막음(멀티스레드 히스토그램 계산의 덧셈 순서가 스레드 스케줄링에 따라 실행마다 조금씩 달라질 수 있음 — 특정 터미널/셸 문제가 아니라 "프로세스를 새로 띄울 때마다" 나타나는 XGBoost 자체의 알려진 한계).
+- 이 미세한 흔들림 자체는 무시할 수준이지만, `unreg_sender_with_url`/`suspicious_unreg_number_combo`처럼 permutation importance가 0에 거의 붙어있는 feature는 이 흔들림만으로도 0을 넘었다 안 넘었다 하며 매 실행마다 포함/제외가 뒤집힘.
+- 반대로 위 표의 4개(`structural_phishing_score`/`is_sms_initiated_unreg`/`cold_contact`/`repeat_pressure_intensity`)는 여러 차례 재실행에서 한 번도 빠짐없이 생존 → 실행 노이즈에 흔들리지 않는 안정적인 신호로 판단.
+
+**최종 결정**: `unreg_sender_with_url`/`suspicious_unreg_number_combo`는 노이즈 수준으로 판단해 제외하고, 위 표의 **4개를 최종 확정 목록으로 유지**함. `run_stability_check()`(`-m ablation_stability`)까지 돌리지 않고도, 반복 재실행 자체로 이미 "무엇이 안정적인 신호인지"가 충분히 드러났다고 판단.
+
 **검증 -> 실제 파이프라인에 반영하는 방법**:
 - 검증 진행 후에는 `schema_columns.py`의 `SCHEMA`에 미등록된 상태 -> 직접 등록하는 과정이 필요함.
 - 실제 반영하려면: ① SCHEMA에 위 4개 `ColumnSchema` 등록 → ② `generate_final_dataset()`에 파생 feature 계산 연결 → ③ `main.py::DATASET_GEN_VERSION`을 1→2로 올려서 캐시 무효화 → ④ `-m generate`(또는 `-m final`) 재실행
+- (선택) `-m ablation_stability`는 baseline 대비 성능 차이 자체가 노이즈인지 K-Fold로 재검증하는 별도 도구. 위 4개 선정 자체는 반복 재실행으로 이미 안정성이 확인됐으므로 필수는 아니고, 필요시 추가 확인용으로 사용 가능.
 
 ---
 
@@ -261,6 +283,7 @@
 | `DataSet/` | 최종 dataset(`final_dataset.csv`/`.parquet`/`.meta.json`). `-m generate`/`-m final` 실행 시 생성. | 추적됨(커밋 대상) |
 | `sensitivity_results/` | 민감도분석 모드(`sen`/`each_sen`/`ratio`/`stress`) 결과 json. | `.gitignore` 처리(재실행하면 다시 생성되므로 커밋 대상 아님) |
 | `feature_selection_results/` | ablation 모드 결과 json(`feature_selection_pipeline.json`). | `.gitignore` 처리 |
+| `feature_stability_results/` | ablation_stability 모드 결과 json(`feature_stability_check.json` — baseline/final summary + diff). `feature_selection_results/`와 성격이 달라 별도 폴더로 분리. | `.gitignore` 처리 |
 | `optuna_results/` | tune 모드 결과 json(`best_params.json` — winner 모델+하이퍼파라미터). | `.gitignore` 처리 |
 
 ---

@@ -12,5 +12,8 @@ sensitivity_results/
 # 파생 feature 선정 파이프라인 결과물 (코드 실행하면 로컬에서 다시 생성됨, 커밋 대상 아님)
 feature_selection_results/
 
+# 파생 feature 안정성 재검증(K-Fold) 결과물 (코드 실행하면 로컬에서 다시 생성됨, 커밋 대상 아님)
+feature_stability_results/
+
 # Optuna 하이퍼파라미터 탐색 결과물 (코드 실행하면 로컬에서 다시 생성됨, 커밋 대상 아님)
 optuna_results/
