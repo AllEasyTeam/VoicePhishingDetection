@@ -11,9 +11,9 @@ from sklearn.metrics import (
     confusion_matrix,
     precision_recall_curve,
     auc,
+    average_precision_score,
 )
 from sklearn.model_selection import train_test_split
-
 from Simulator.schema_utils import get_feature_columns, get_non_feature_columns
 
 
@@ -57,8 +57,12 @@ def split_data(df):
 
 def pr_auc(y, proba):
     # Precision-Recall AUC.
-    p, r, _ = precision_recall_curve(y, proba)
-    return float(auc(r, p))
+    return float(average_precision_score(y, proba))
+    # 민감도 분석에서 사용한 pr-auc는 precision_recall_curve
+    ## 민감도 분석의 경우에는 상대적인 우열을 가려내는 것이기에 "precsion_recall_curve"가 유효
+    ## 최종 모델 평가에서는 정대적인 수치가 중요하기에 precsion_recall_curve"f로 바꿈.
+    #p, r, _ = precision_recall_curve(y, proba)
+    # return float(auc(r, p))
 
 
 def lift_at_top_k(y, proba, k=0.05):
