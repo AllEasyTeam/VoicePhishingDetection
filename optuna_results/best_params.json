@@ -1,0 +1,267 @@
+{
+  "comparison": {
+    "PR-AUC": {
+      "XGBoost": 0.9940925992462692,
+      "LightGBM": 0.9935289691101626,
+      "diff(LightGBM - XGBoost)": -0.0006,
+      "higher": "XGBoost"
+    },
+    "Lift@Top1%": {
+      "XGBoost": 96.4,
+      "LightGBM": 97.84,
+      "diff(LightGBM - XGBoost)": 1.44,
+      "higher": "LightGBM"
+    },
+    "hyperparameter_importance_ranked": {
+      "XGBoost": [
+        {
+          "rank": 1,
+          "param": "max_depth",
+          "importance": 0.2966,
+          "importance_pct": "29.7%"
+        },
+        {
+          "rank": 2,
+          "param": "colsample_bytree",
+          "importance": 0.2769,
+          "importance_pct": "27.7%"
+        },
+        {
+          "rank": 3,
+          "param": "learning_rate",
+          "importance": 0.1807,
+          "importance_pct": "18.1%"
+        },
+        {
+          "rank": 4,
+          "param": "subsample",
+          "importance": 0.0947,
+          "importance_pct": "9.5%"
+        },
+        {
+          "rank": 5,
+          "param": "reg_alpha",
+          "importance": 0.08,
+          "importance_pct": "8.0%"
+        },
+        {
+          "rank": 6,
+          "param": "min_child_weight",
+          "importance": 0.0358,
+          "importance_pct": "3.6%"
+        },
+        {
+          "rank": 7,
+          "param": "scale_pos_weight",
+          "importance": 0.0227,
+          "importance_pct": "2.3%"
+        },
+        {
+          "rank": 8,
+          "param": "reg_lambda",
+          "importance": 0.0126,
+          "importance_pct": "1.3%"
+        }
+      ],
+      "LightGBM": [
+        {
+          "rank": 1,
+          "param": "min_child_samples",
+          "importance": 0.4852,
+          "importance_pct": "48.5%"
+        },
+        {
+          "rank": 2,
+          "param": "colsample_bytree",
+          "importance": 0.3208,
+          "importance_pct": "32.1%"
+        },
+        {
+          "rank": 3,
+          "param": "subsample",
+          "importance": 0.0563,
+          "importance_pct": "5.6%"
+        },
+        {
+          "rank": 4,
+          "param": "learning_rate",
+          "importance": 0.0514,
+          "importance_pct": "5.1%"
+        },
+        {
+          "rank": 5,
+          "param": "num_leaves",
+          "importance": 0.045,
+          "importance_pct": "4.5%"
+        },
+        {
+          "rank": 6,
+          "param": "reg_lambda",
+          "importance": 0.0166,
+          "importance_pct": "1.7%"
+        },
+        {
+          "rank": 7,
+          "param": "scale_pos_weight",
+          "importance": 0.0118,
+          "importance_pct": "1.2%"
+        },
+        {
+          "rank": 8,
+          "param": "reg_alpha",
+          "importance": 0.011,
+          "importance_pct": "1.1%"
+        },
+        {
+          "rank": 9,
+          "param": "max_depth",
+          "importance": 0.0019,
+          "importance_pct": "0.2%"
+        }
+      ]
+    }
+  },
+  "XGBoost": {
+    "model_type": "XGBoost",
+    "tuned_hyperparams": {
+      "n_estimators": 101,
+      "learning_rate": 0.08548553159835647,
+      "scale_pos_weight": 130.59614823715435,
+      "max_depth": 4,
+      "min_child_weight": 26.154794880589815,
+      "subsample": 0.6922871902397985,
+      "colsample_bytree": 0.6425374365382767,
+      "reg_alpha": 4.137988554524817,
+      "reg_lambda": 0.026215181521164376
+    },
+    "best_value(val PR-AUC)": 0.9940925992462692,
+    "val_lift_top1%": 96.4,
+    "hyperparameter_importance_ranked(val PR-AUC 기준, fANOVA, 순위·비율순)": [
+      {
+        "rank": 1,
+        "param": "max_depth",
+        "importance": 0.2966,
+        "importance_pct": "29.7%"
+      },
+      {
+        "rank": 2,
+        "param": "colsample_bytree",
+        "importance": 0.2769,
+        "importance_pct": "27.7%"
+      },
+      {
+        "rank": 3,
+        "param": "learning_rate",
+        "importance": 0.1807,
+        "importance_pct": "18.1%"
+      },
+      {
+        "rank": 4,
+        "param": "subsample",
+        "importance": 0.0947,
+        "importance_pct": "9.5%"
+      },
+      {
+        "rank": 5,
+        "param": "reg_alpha",
+        "importance": 0.08,
+        "importance_pct": "8.0%"
+      },
+      {
+        "rank": 6,
+        "param": "min_child_weight",
+        "importance": 0.0358,
+        "importance_pct": "3.6%"
+      },
+      {
+        "rank": 7,
+        "param": "scale_pos_weight",
+        "importance": 0.0227,
+        "importance_pct": "2.3%"
+      },
+      {
+        "rank": 8,
+        "param": "reg_lambda",
+        "importance": 0.0126,
+        "importance_pct": "1.3%"
+      }
+    ],
+    "n_trials": 50,
+    "base_scale_pos_weight(참고용, 실제 데이터 neg/pos 비율)": 99.53859964093357
+  },
+  "LightGBM": {
+    "model_type": "LightGBM",
+    "tuned_hyperparams": {
+      "n_estimators": 136,
+      "learning_rate": 0.0351351999000414,
+      "scale_pos_weight": 89.01813837739704,
+      "max_depth": 5,
+      "num_leaves": 29,
+      "min_child_samples": 34,
+      "subsample": 0.7096735738918215,
+      "colsample_bytree": 0.6762286982552375,
+      "reg_alpha": 0.6105600722848871,
+      "reg_lambda": 4.850251482442891
+    },
+    "best_value(val PR-AUC)": 0.9935289691101626,
+    "val_lift_top1%": 97.84,
+    "hyperparameter_importance_ranked(val PR-AUC 기준, fANOVA, 순위·비율순)": [
+      {
+        "rank": 1,
+        "param": "min_child_samples",
+        "importance": 0.4852,
+        "importance_pct": "48.5%"
+      },
+      {
+        "rank": 2,
+        "param": "colsample_bytree",
+        "importance": 0.3208,
+        "importance_pct": "32.1%"
+      },
+      {
+        "rank": 3,
+        "param": "subsample",
+        "importance": 0.0563,
+        "importance_pct": "5.6%"
+      },
+      {
+        "rank": 4,
+        "param": "learning_rate",
+        "importance": 0.0514,
+        "importance_pct": "5.1%"
+      },
+      {
+        "rank": 5,
+        "param": "num_leaves",
+        "importance": 0.045,
+        "importance_pct": "4.5%"
+      },
+      {
+        "rank": 6,
+        "param": "reg_lambda",
+        "importance": 0.0166,
+        "importance_pct": "1.7%"
+      },
+      {
+        "rank": 7,
+        "param": "scale_pos_weight",
+        "importance": 0.0118,
+        "importance_pct": "1.2%"
+      },
+      {
+        "rank": 8,
+        "param": "reg_alpha",
+        "importance": 0.011,
+        "importance_pct": "1.1%"
+      },
+      {
+        "rank": 9,
+        "param": "max_depth",
+        "importance": 0.0019,
+        "importance_pct": "0.2%"
+      }
+    ],
+    "n_trials": 50,
+    "base_scale_pos_weight(참고용, 실제 데이터 neg/pos 비율)": 99.53859964093357
+  }
+}
