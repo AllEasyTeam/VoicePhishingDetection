@@ -323,6 +323,23 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 
 ---
 
+### 최종 학습 결과 (`-m final` + 경계선 재확인, 2026-09-21)
+
+조건: N=100,000, train/test 70/30, 모델 XGBoost(`optuna_results/best_params.json`의 `winner` + `tuned_hyperparams`). Optuna val PR-AUC는 XGBoost 0.9941 > LightGBM 0.9935(Lift@Top1%는 LightGBM이 더 높았으나 PR-AUC 기준으로 XGBoost 채택). `evaluate(pr_auc_method="average_precision")`.
+
+| Track | precision | recall | f1 | PR-AUC | Lift@Top5% | Lift@Top10% | FN |
+|---|---|---|---|---|---|---|---|
+| B | 0.989 | 0.919 | 0.953 | 0.974 | 19.66 | 9.87 | 24/298 |
+| C | 0.997 | 0.973 | 0.985 | 0.991 | 19.93 | 10.00 | 8/298 |
+
+**결정**: 메인 보고 모델은 Track C. B vs C 우열은 재확인 불필요.
+
+경계선 재확인 결과와 SCHEMA 유지 결정:
+- 약한 파생 2개 제거 시 B는 성능 유지, C는 PR-AUC 유지·F1/recall 소폭 하락. 4개 파생은 SCHEMA에 유지(이전 `weak_pair` K=10과 동일).
+- `is_global`은 2.11% 관측되나 `number_type`과 100% 중복, gain/perm 모두 0. 스키마는 유지하고 보고 시 중복으로 명시.
+- 피처 중요도 보고 기준은 permutation(PR-AUC). gain 1위였던 Track B `sms_to_call`(25.3%)은 perm 0.0009. Track B 실제 상위는 `number_type` > `sms_to_call_gap` > `repeat_gap`. Track C 실제 상위는 `number_type` > `is_reliable_url` > `sms_to_call_gap`.
+
+---
 
 ## 결과물 저장 폴더
 

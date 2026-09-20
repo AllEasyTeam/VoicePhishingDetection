@@ -1,4 +1,5 @@
 {
+  "winner": "XGBoost",
   "comparison": {
     "PR-AUC": {
       "XGBoost": 0.9940925992462692,

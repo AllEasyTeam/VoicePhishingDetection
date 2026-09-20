@@ -182,6 +182,12 @@ gain만 보면 Track B에서 `sms_to_call`이 25.3%로 1위처럼 보이지만, 
 
 ---
 
+## 결론 (보고서용)
+
+통신사 실측 없이 단말·구조적 신호만으로도, 합성 데이터 기준 보이스피싱을 높은 정밀도로 걸러낼 수 있었다. 최종 모델은 Optuna로 고른 XGBoost이며, 문자 URL·번호 불일치 등 구조적 신호를 더한 Track C가 단말만 쓰는 Track B보다 F1 0.953→0.985, PR-AUC 0.974→0.991로 앞섰고 미탐은 24건에서 8건으로 줄었다. 보고용 피처 중요도는 XGBoost gain이 아니라 permutation(PR-AUC)을 쓴다. 핵심 신호는 발신번호 대역(`number_type`)과 문자→통화 간격(`sms_to_call_gap`)이고, Track C에서는 비신뢰 URL(`is_reliable_url`)이 추가로 큰 역할을 한다. gain에서 커 보이던 `sms_to_call`은 섞어도 순위가 거의 바뀌지 않았고, `is_global`은 `number_type`과 완전 중복이며, 파생 4개 중 약한 2개는 빼도 랭킹 성능이 유지된다. 다만 이 수치는 합성 데이터 내부 평가이므로 실제 통화·문자 분포와의 차이는 아직 검증하지 못했다.
+
+---
+
 ## 방법론 핵심 원칙
 
 - **Generation-Detection 분리**: `Detection/`은 `Generation/config.py`를 참조하지 않는다. 생성 규칙 암기 방지가 목적.
