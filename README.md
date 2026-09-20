@@ -47,7 +47,8 @@
         ├── feature_ablation.py           # 파생 feature 선정 + 안정성 재검증 파이프라인
         ├── optuna_apply.py               # XGBoost/LightGBM 하이퍼파라미터 탐색
         ├── train_eval.py                 # 분할 → 학습 → 평가
-        └── sensitivity_analysis.py       # 파라미터별 민감도/스트레스 분석
+        ├── sensitivity_analysis.py       # 파라미터별 민감도/스트레스 분석
+        └── borderline_recheck.py         # -m final 경계선 재확인 (약한 파생 제거·is_global·permutation)
 ```
 
 각 파일의 상세 역할과 선언된 함수 목록은 [Structure.md](Structure.md)에 정리돼 있다.
@@ -108,16 +109,35 @@ python -X utf8 -m Simulator.main -m final
 
 ## 결과
 
-### Track별 최종 성능
+### Track별 최종 성능 (`-m final`, 2026-09-21)
 
-N=100,000, Track별 최종 평가(test_set 기준):
+N=100,000, train 70,000 / test 30,000 (피싱 298건). 모델은 Optuna 탐색 후 **XGBoost**(val PR-AUC 0.9941 > LightGBM 0.9935)와 `optuna_results/best_params.json`의 `tuned_hyperparams`를 사용. PR-AUC는 `average_precision_score`. threshold는 train에서만 고르고 test에 고정 적용.
 
-| Track | precision | recall | f1 | PR-AUC | Lift@Top5% |
-|---|---|---|---|---|---|
-| B (단말만) | | | | | |
-| C (단말+구조적신호) | | | | | |
+| Track | precision | recall | f1 | PR-AUC | Lift@Top5% | Lift@Top10% | FN (미탐) |
+|---|---|---|---|---|---|---|---|
+| B (단말만) | 0.989 | 0.919 | 0.953 | 0.974 | 19.66 | 9.87 | 24/298 |
+| C (단말+구조적신호) | 0.997 | 0.973 | 0.985 | 0.991 | 19.93 | 10.00 | 8/298 |
 
-*(`-m final` 실행 후 채울 예정)*
+**메인 결과는 Track C.** B 대비 F1 +0.032, PR-AUC +0.018, 미탐 24건→8건. Lift@Top10%/20%는 C가 이론상 상한(10.0 / 5.0)에 도달했다. Track B vs C 우열은 경계선이 아니다.
+
+혼동행렬(test): B는 FP 3 / FN 24, C는 FP 1 / FN 8.
+
+### 피처 중요도 (보고 기준 = permutation, PR-AUC)
+
+`-m final`이 출력하는 `feature_importance`는 XGBoost **gain**(합=1)이라 트리 분할에 자주 쓰인 피처가 과대 평가된다. 최종 해석은 같은 모델·같은 test_set에서 `scoring="average_precision"` permutation importance(반복 10회)를 기준으로 한다.
+
+Track B 상위: `number_type`(0.345) > `sms_to_call_gap`(0.114) > `repeat_gap`(0.061).  
+Track C 상위: `number_type`(0.056) > `is_reliable_url`(0.050) > `sms_to_call_gap`(0.036).
+
+gain만 보면 Track B에서 `sms_to_call`이 25.3%로 1위처럼 보이지만, permutation은 0.0009로 거의 0이다. Track C에서 이 값이 0.8%로 줄어든 것을 “C에서만 쓸모없어졌다”고 읽으면 안 된다 — **B/C 모두 랭킹 기여가 작다.**
+
+### 경계선 재확인 (`borderline_recheck.py`)
+
+같은 dataset·같은 split·같은 하이퍼파라미터로 세 가지를 재확인했다. SCHEMA/최종 학습 feature는 **바꾸지 않고 유지**한다(해석만 확정).
+
+1. **약한 파생 2개** (`is_sms_initiated_unreg`, `repeat_pressure_intensity`)를 빼고 재학습: Track B는 F1/PR-AUC가 사실상 동일(F1 +0.002, PR-AUC −0.0007). Track C는 PR-AUC 동일(−0.0001), F1 −0.005·recall −0.010. 이전 K=10 `weak_pair` 결론과 같다. 랭킹 성능은 유지되므로 4개 파생을 SCHEMA에 남겨 둔다.
+2. **`is_global`**: 10만 건 중 2,114건(2.11%)이라 희귀 피처가 아니다. 그러나 `number_type == "00X(국제)"`와 **100% 일치**하고, gain·permutation 모두 0이다. `number_type`이 있으면 완전 중복.
+3. **gain vs permutation**: 위 피처 중요도 절 참고. `cold_contact`는 gain이 B에서 15.8%로 크지만 permutation은 0.010으로 작다. 파생 4개 중 상대적으로 강한 쪽은 `cold_contact`이고, 약한 2개는 최종 모델에서도 기여가 작다.
 
 ### 파생 feature 검증 (`-m ablation` / `-m ablation_stability`)
 
@@ -172,6 +192,7 @@ N=100,000, Track별 최종 평가(test_set 기준):
 - **결측치는 구조적 게이트로만 발생**: 예를 들어 "사건 내 반복 접촉이 없으면 재연락 간격은 결측"처럼, 결측은 항상 선행 조건에 의해 명시적으로 발생하며 `schema.py`의 `depends_on`에 그 규칙을 텍스트로 남긴다. 근거 없는 임의 결측은 없다.
 - **낙관 편향 방지**: 판정 threshold는 항상 train_set에서만 결정하고 test_set에는 고정 적용만 한다. feature 선정 단계의 3단계(Embedded/Permutation Importance)도 train_set 내부의 별도 val_sub로만 계산해 test_set을 건드리지 않는다.
 - **재현성 vs 실행 간 흔들림의 구분**: 같은 코드·같은 설정이라도 XGBoost의 멀티스레드 히스토그램 학습 특성상 완전히 새 프로세스로 실행하면 결과가 미세하게 달라질 수 있음을 직접 확인했다. 그래서 permutation importance가 0에 가까운 경계선 feature는 단일 실행 결과만으로 판단하지 않고, 같은 fold로 baseline과 반복 비교하는 안정성 재검증(`run_stability_check`) 단계를 별도로 거친다.
+- **최종 보고 시 gain이 아니라 permutation**: `-m final`의 `feature_importance`(gain)는 상관된 피처에서 한쪽으로 몰릴 수 있다. 최종 해석은 permutation importance(PR-AUC)를 쓴다.
 
 ---
 
@@ -181,3 +202,4 @@ N=100,000, Track별 최종 평가(test_set 기준):
 - **파생 feature 잔여 후보**: 13개 중 4개만 확정 반영됐고, 나머지 9개는 검증 탈락(다중공선성/낮은 permutation importance) 또는 대기 상태다. 새로운 파생 feature 아이디어가 나오면 동일한 ablation 파이프라인으로 재검증 가능.
 - **실데이터 대비 검증 공백**: 현재 모든 성능 지표는 합성 데이터 내부의 train/test 분할 기준이다. 실제 피해 사례·정상 통화 표본과의 분포 차이(synthetic-to-real gap) 검증은 아직 진행되지 않았다.
 - **모델 비교 확장**: 현재는 XGBoost/LightGBM만 Optuna로 비교한다. 향후 다른 계열 모델과의 비교도 고려 가능.
+- **`is_global` 중복**: `number_type`과 100% 일치해 최종 모델에서 쓰이지 않는다. SCHEMA에서는 남겨 두었고, 보고 시에는 중복 피처로 명시한다.

@@ -28,7 +28,8 @@
         ├── feature_ablation.py
         ├── optuna_apply.py
         ├── train_eval.py         
-        └── sensitivity_analysis.py 
+        ├── sensitivity_analysis.py
+        └── borderline_recheck.py
 ```
 
 ---
@@ -307,6 +308,21 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 
 ---
 
+### `Detection/borderline_recheck.py`
+
+역할: `-m final` 단일 실행에서 경계선으로 남은 해석을, 같은 dataset/split/하이퍼파라미터로 재확인하는 스크립트. CLI 모드가 아니라 `python -X utf8 -m Simulator.Detection.borderline_recheck`로 실행.
+
+하는 일:
+- 약한 파생 2개(`is_sms_initiated_unreg`, `repeat_pressure_intensity`)를 빼고 Track B/C를 재학습해 F1/PR-AUC diff를 비교.
+- `is_global` 빈도 및 `number_type == "00X(국제)"`와의 일치율 확인.
+- Track B/C 최종 모델에 대해 test_set permutation importance(`scoring="average_precision"`, 10회)를 계산해 gain과 대조.
+
+최종 산출물: `borderline_recheck_results/borderline_recheck.json`.
+
+**이 파일은 `Generation/config.py`를 import하지 않아야 함.** (`main.py`의 dataset 캐시·하이퍼파라미터 로더만 사용)
+
+---
+
 
 ## 결과물 저장 폴더
 
@@ -319,6 +335,7 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 | `feature_selection_results/` | ablation 모드 결과 json(`feature_selection_pipeline.json`). | `.gitignore` 처리 |
 | `feature_stability_results/` | ablation_stability 모드 결과 json(`feature_stability_check.json` — baseline summary + 조합별(`combos`) summary/diff). `feature_selection_results/`와 성격이 달라 별도 폴더로 분리. | `.gitignore` 처리 |
 | `optuna_results/` | tune 모드 결과 json(`best_params.json` — winner 모델+하이퍼파라미터). | `.gitignore` 처리 |
+| `borderline_recheck_results/` | `-m final` 경계선 재확인 json(`borderline_recheck.json` — 약한 파생 제거 비교, `is_global` 빈도, permutation importance). | `.gitignore` 처리 |
 
 ---
 
