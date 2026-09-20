@@ -264,7 +264,7 @@ def run_optuna_tuning_and_compare(X_train, y_train, X_val, y_val, n_trials=50, r
             contour_params = (
                 ["colsample_bytree", "max_depth"]
                 if model_name == "XGBoost"
-                else ["colsample_bytree", "num_leaves"]
+                else ["colsample_bytree", "min_child_samples"]
             )
             fig_contour = vis.plot_contour(target_study, params=contour_params)
             fig_contour.update_layout(title=f"[{model_name}] Contour Plot ({contour_params[0]} vs {contour_params[1]})")
