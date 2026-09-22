@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import precision_recall_curve, auc
+from Simulator.schema import Track
 
 from Simulator.Detection.train_eval import split_data, prepare_categorical
 from Simulator.main import get_or_generate_final_dataset, load_tuned_hyperparams
@@ -27,7 +29,8 @@ def plot_xgboost_learning_curve():
 
     # 2. 최적 하이퍼파라미터 로드 및 피처 선택 (Track C: 전체 21개 피처 기준)
     _, tuned_params = load_tuned_hyperparams()
-    feature_cols = get_feature_columns()  # Track C 피처
+    # Track A(통신사 망) 제외: 단말(B) 및 단말 구조적 신호(C)만 지정
+    feature_cols = get_feature_columns(track_filter=[Track.DEVICE, Track.DEVICE_STRUCTURAL])
 
     X_train = train_set[feature_cols]
     y_train = train_set["is_phishing"]
@@ -128,7 +131,6 @@ def run_shap_analysis():
     # -------------------------------------------------------------
     # 그래프 2: 실제 피싱 사건 1건에 대한 알림 근거 플롯 (Waterfall Plot)
     # -------------------------------------------------------------
-    # Test 셋에서 실제 피싱인 고위험 샘플 인덱스 1개 선택
     phishing_indices = test_set.index[test_set["is_phishing"] == 1].tolist()
     sample_loc = test_set.index.get_loc(phishing_indices[0])
 
@@ -141,8 +143,46 @@ def run_shap_analysis():
     plt.close()
     print(f"개별 알림용 Waterfall 플롯 저장 완료: {waterfall_path}")
 
+    # -------------------------------------------------------------
+    # 💡 [추가된 부분] 3: 직관적인 백분율(%) 표 출력 및 저장
+    # -------------------------------------------------------------
+    df_table = get_shap_percentage_table(shap_values, sample_loc)
+    
+    print("\n🚨 [사용자 알림 UI 연계용 탐지 근거 분석 표] 🚨")
+    # .to_string()을 사용하여 중간에 생략되는 행 없이 터미널에 전체 표를 깔끔하게 출력
+    print(df_table.to_string(index=False)) 
+    
+    # 보고서 첨부 및 타 모듈 전달을 위해 CSV 파일로도 저장
+    table_path = _OUT_DIR / "shap_percentage_table.csv"
+    df_table.to_csv(table_path, index=False, encoding="utf-8-sig")
+    print(f"\n기여도 백분율 표 저장 완료: {table_path}")
 
+
+def get_shap_percentage_table(shap_values_obj, sample_idx):
+    # (이 함수 내용은 기존 작성하신 내용과 100% 동일하게 유지합니다)
+    local_shap_values = shap_values_obj[sample_idx].values
+    feature_names = shap_values_obj.feature_names
+    feature_values = shap_values_obj[sample_idx].data
+    
+    abs_shap = np.abs(local_shap_values)
+    total_abs_shap = np.sum(abs_shap)
+    percentages = (abs_shap / total_abs_shap) * 100
+    
+    df_explanation = pd.DataFrame({
+        "탐지 근거 (Feature)": feature_names,
+        "실제 행동 값 (Value)": feature_values,
+        "기여도 (%)": np.round(percentages, 1),
+        "영향 방향": ["위험 증가 🚨" if val > 0 else "위험 감소 ⬇️" for val in local_shap_values]
+    })
+    
+    df_explanation = df_explanation.sort_values(by="기여도 (%)", ascending=False).reset_index(drop=True)
+    return df_explanation
+
+
+# 중복된 __main__ 블록을 하나로 합쳐서 두 시각화가 모두 차례대로 실행되게 수정
 if __name__ == "__main__":
-    run_shap_analysis()
-if __name__ == "__main__":
+    print("1. XGBoost 학습 곡선(Learning Curve) 시각화를 시작합니다...")
     plot_xgboost_learning_curve()
+    
+    print("\n2. SHAP 전역 기여도 및 사용자 알림용 백분율(%) 분석을 시작합니다...")
+    run_shap_analysis()
