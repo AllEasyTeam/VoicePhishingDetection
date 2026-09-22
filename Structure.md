@@ -207,7 +207,7 @@
 
 선언된 함수/상수:
 - `CANDIDATE_DERIVED_FEATURES`: `derived_features.py`가 만드는 13개 후보 중 아직 SCHEMA 미등록인 9개(확정 4개 제외) 이름 목록. `run_stability_check()` 기본 검증 대상이기도 함.
-- `FINAL_CANDIDATE_FEATURES`: `run_feature_selection_pipeline()` 실행(2026-09-19, N=100,000) 결과로 확정된 최종 4개(아래 표 참고, 참고용 상수 — SCHEMA에 이미 등록되어 `baseline_cols`에 포함되므로 더 이상 후보로 넣으면 안 됨).
+- `FINAL_CANDIDATE_FEATURES`: `run_feature_selection_pipeline()` 실행(2026-09-19, N=100,000) 결과로 확정된 최종 4개(아래 표 참고). 참고용 상수 — SCHEMA에 이미 등록되어 `baseline_cols`에 포함되므로 `run_stability_check()`의 기본 검증 대상이 아님(기본은 잔여 9개).
 - `DEFAULT_MULTICOLLINEARITY_THRESHOLD=0.8`/`DEFAULT_LEAKAGE_THRESHOLD=0.95`/`DEFAULT_VAL_SIZE=0.2`/`DEFAULT_PERM_N_REPEATS=10`: 선정 파이프라인 각 단계 기본 임계값·비율.
 - `DEFAULT_STABILITY_K=10`: `run_stability_check()` 기본 K(민감도분석 기본값 5보다 크게 잡음 — 재검증 성격이라).
 - `_metrics_summary(m)`: `evaluate()` 결과에서 threshold/accuracy/precision/recall/f1/PR-AUC/Lift@Top5~20%만 추려 요약(두 함수가 공유). 두 함수 모두 `evaluate()` 호출 시 `pr_auc_method="average_precision"`을 명시함(baseline/full/final, baseline/조합끼리 서로 비교하는 목적이라 — `train_eval.py` 섹션 참고).

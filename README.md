@@ -100,7 +100,7 @@ python -X utf8 -m Simulator.main -m final
 | `-m sen` / `-m each_sen` / `-m ratio` | sophistication·지인:기관 비중 민감도분석 |
 | `-m stress` | 절대값 가정 자체가 틀렸을 때의 스트레스테스트 |
 | `-m ablation` | 파생 feature 후보 선정 파이프라인 실행 |
-| `-m ablation_stability` | 확정된 파생 feature 조합의 성능 차이가 노이즈인지 K-Fold 재검증 |
+| `-m ablation_stability` | SCHEMA 미등록 잔여 후보(현재 9개)를 baseline에 더했을 때 성능 차이가 노이즈인지 K-Fold 재검증. 이미 SCHEMA에 넣은 확정 4개는 비교 대상에 넣지 않음(컬럼 중복) |
 | `-m tune` | XGBoost/LightGBM Optuna 하이퍼파라미터 탐색 |
 
 각 모드의 상세 파라미터는 `Simulator/main.py` 상단 상수와 하단 CLI 사용법 주석을 참고.
@@ -159,9 +159,11 @@ gain만 보면 Track B에서 `sms_to_call`이 25.3%로 1위처럼 보이지만, 
 | `cold_contact` | 완전 낯선 접촉 여부(미저장+이력 없음) | 단말(B) |
 | `repeat_pressure_intensity` | 재연락 압박 강도(재연락 간격 기반 연속 점수) | 단말(B) |
 
-이 4개를 추가해도 baseline 대비 f1/PR-AUC는 거의 그대로였는데(뚜렷한 향상도, 손해도 아닌 수준), 이 차이가 실제 효과인지 단일 실행의 우연인지 확인하기 위해 `run_stability_check()`로 같은 K=10 fold 안에서 baseline과 반복 비교했다. **모든 지표에서 diff가 baseline/final의 결합 표준오차보다 작아, 통계적으로 baseline과 구별되지 않음을 확인**했다(= 4개를 추가해도 손해가 없다는 것이 재검증으로 뒷받침됨). 추가로 4개 중 `cold_contact`/`structural_phishing_score` 2개만으로도 4개 전체 효과의 대부분을 재현하고, 나머지 2개는 기여가 거의 없다는 것도 확인했다(자세한 수치는 [Structure.md](Structure.md) 참고).
+이 4개를 추가해도 baseline 대비 f1/PR-AUC는 거의 그대로였는데(뚜렷한 향상도, 손해도 아닌 수준), 이 차이가 실제 효과인지 단일 실행의 우연인지 확인하기 위해 `run_stability_check()`로 같은 K=10 fold 안에서 baseline과 반복 비교했다(당시 비교 대상은 확정 직전의 4개 조합). **모든 지표에서 diff가 baseline/final의 결합 표준오차보다 작아, 통계적으로 baseline과 구별되지 않음을 확인**했다(= 4개를 추가해도 손해가 없다는 것이 재검증으로 뒷받침됨). 추가로 4개 중 `cold_contact`/`structural_phishing_score` 2개만으로도 4개 전체 효과의 대부분을 재현하고, 나머지 2개는 기여가 거의 없다는 것도 확인했다(자세한 수치는 [Structure.md](Structure.md) 참고).
 
 확정된 4개는 이제 `schema_columns.py`의 SCHEMA에 등록되어 production feature(총 25개)에 포함됐다. 그래서 `feature_ablation.py`의 후보 pool(`CANDIDATE_DERIVED_FEATURES`)도 13개에서, 검증에 탈락했거나 아직 미확정인 나머지 9개로 줄었다 — 이후 `-m ablation`을 다시 돌리면 이 4개는 이미 baseline에 포함된 채로, 남은 9개(또는 새로 추가하는 아이디어)만 후보로 검증하게 된다.
+
+**현재 `-m ablation_stability`의 의미(SCHEMA 등록 이후):** 확정 4개는 이미 baseline에 들어가 있어서 다시 “더하기” 비교를 하면 컬럼이 중복된다. 그래서 기본 비교 대상은 **아직 SCHEMA에 없는 잔여 9개**(`remaining_candidates`)다. “확정 4개가 노이즈인지”를 보던 과거 실행과 목적이 다르다.
 
 실제로 SCHEMA 반영 이후 이 9개를 25개짜리(4개 포함) baseline 대비로 다시 검증해봤는데, 다중공선성 제거 후 남은 7개 전부 permutation importance ≤0으로 다시 탈락했다(`final_candidate_features: []`) — 이미 탈락했던 후보들이 더 강해진 baseline에서도 여전히 기여가 없다는 뜻이라, 4개 확정 결정을 다시 한번 뒷받침한다.
 
@@ -198,7 +200,7 @@ gain만 보면 Track B에서 `sms_to_call`이 25.3%로 1위처럼 보이지만, 
 - **결측치는 구조적 게이트로만 발생**: 예를 들어 "사건 내 반복 접촉이 없으면 재연락 간격은 결측"처럼, 결측은 항상 선행 조건에 의해 명시적으로 발생하며 `schema.py`의 `depends_on`에 그 규칙을 텍스트로 남긴다. 근거 없는 임의 결측은 없다.
 - **낙관 편향 방지**: 판정 threshold는 항상 train_set에서만 결정하고 test_set에는 고정 적용만 한다. feature 선정 단계의 3단계(Embedded/Permutation Importance)도 train_set 내부의 별도 val_sub로만 계산해 test_set을 건드리지 않는다.
 - **재현성 vs 실행 간 흔들림의 구분**: 같은 코드·같은 설정이라도 XGBoost의 멀티스레드 히스토그램 학습 특성상 완전히 새 프로세스로 실행하면 결과가 미세하게 달라질 수 있음을 직접 확인했다. 그래서 permutation importance가 0에 가까운 경계선 feature는 단일 실행 결과만으로 판단하지 않고, 같은 fold로 baseline과 반복 비교하는 안정성 재검증(`run_stability_check`) 단계를 별도로 거친다.
-- **최종 보고 시 gain이 아니라 permutation**: `-m final`의 `feature_importance`(gain)는 상관된 피처에서 한쪽으로 몰릴 수 있다. 최종 해석은 permutation importance(PR-AUC)를 쓴다.
+- **최종 보고 시 gain이 아니라 permutation**: `-m final`의 `feature_importance`는 XGBoost **gain**(합=1)이라 트리 분할에 자주 쓰인 피처가 과대 평가될 수 있다. 최종 해석은 같은 모델·같은 test_set에서 피처를 섞어 PR-AUC가 얼마나 떨어지는지 보는 permutation importance를 쓴다(`borderline_recheck.py`).
 
 ---
 
