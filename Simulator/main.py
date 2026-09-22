@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
-from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical
+from Simulator.Detection.train_eval_cali import split_data, train_model, evaluate, prepare_categorical,fit_calibrator
 from Simulator.Detection.sensitivity_analysis import run_sensitivity, run_stress_sensitivity
 from Simulator.Detection.feature_ablation import (
     run_feature_selection_pipeline,
@@ -226,6 +226,15 @@ def run_final():
 
     train_set, test_set = split_data(df) # train/test 2분할
 
+    # confidence calibration을 활용하면 보정용 데이터를 train에서 다시 한번 더 나누어야함.
+    # 2. [추가] 1% 극단적 불균형을 유지하며 Train 데이터를 학습용(80%)과 보정용(20%)으로 재분할
+    train_sub, val_calib = train_test_split(
+        train_set, 
+        test_size=0.3, 
+        random_state=42, 
+        stratify=train_set["is_phishing"]
+    )
+
     model_type, tuned_hyperparams = load_tuned_hyperparams()  # 없으면 (None, None) -> 기본값 사용
     model_type = model_type or "XGBoost"
 
@@ -233,13 +242,40 @@ def run_final():
     for scenario_name, tracks in TRACK_SCENARIOS.items():
         # TRACK_SCENARIOS 개수만큼 반복. (Track별로 다른 모델 생성 및 평가 진행)
         cols = get_feature_columns(track_filter=tracks)
-        model = train_model(train_set, feature_cols=cols, hyperparams=tuned_hyperparams, model_type=model_type)
+    #    model = train_model(train_set, feature_cols=cols, hyperparams=tuned_hyperparams, model_type=model_type)
         # threshold는 train에서 고르고, 점수는 test에 고정 적용 (낙관 편향 방지)
         # pr_auc_method="average_precision": Track B/C 최종 모델 비교이므로 직선 보간 편향이 없는
         # average_precision_score를 씀(sensitivity_analysis.py의 상대적 우열 비교와는 다른 기준).
-        results[scenario_name] = evaluate(
-            model, test_set, feature_cols=cols, threshold_df=train_set, pr_auc_method="average_precision"
+     #   results[scenario_name] = evaluate(
+      #      model, test_set, feature_cols=cols, threshold_df=train_set, pr_auc_method="average_precision", calibrator=calibrator
+      #  )
+
+        # 3. [수정] 전체 train_set이 아닌 train_sub로 XGBoost 모델 학습
+        model = train_model(
+            train_sub, 
+            feature_cols=cols, 
+            hyperparams=tuned_hyperparams, 
+            model_type=model_type
         )
+
+        # 4. [추가] 분리해둔 val_calib로 Confidence Calibrator 적합 (확률 왜곡 보정)
+        calibrator = fit_calibrator(
+            model, 
+            val_calib, 
+            feature_cols=cols, 
+            method="isotonic"
+        )
+
+        # 5. 최종 평가 시 calibrator 연동 및 threshold_df 변경
+        results[scenario_name] = evaluate(
+            model, 
+            test_set, 
+            feature_cols=cols, 
+            threshold_df=train_sub, 
+            pr_auc_method="average_precision", 
+            calibrator=calibrator
+        )
+
     return results
 
 
@@ -390,7 +426,7 @@ def run_tuning_mode():
         train_set, test_size=TUNE_VAL_SIZE, random_state=42, stratify=train_set["is_phishing"]
     )
 
-    feature_cols = get_feature_columns()
+    feature_cols = get_feature_columns(track_filter=[Track.DEVICE, Track.DEVICE_STRUCTURAL])
     X_train, y_train = train_sub[feature_cols], train_sub["is_phishing"]
     X_val, y_val = val_sub[feature_cols], val_sub["is_phishing"]
 
