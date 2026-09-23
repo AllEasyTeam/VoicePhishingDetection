@@ -32,7 +32,7 @@ from Simulator.Detection.sensitivity_analysis import (
 )
 from Simulator.schema import Track
 from Simulator.schema_utils import get_feature_columns
-from Simulator.main import load_tuned_hyperparams, N, SUBGROUP_RATIO_KEY, GEN_SEED
+from Simulator.main import N, SUBGROUP_RATIO_KEY, GEN_SEED
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _OUT_DIR = _PROJECT_ROOT / "url_reliability_recheck_results"
@@ -62,14 +62,19 @@ PERM_N_REPEATS = 10
 
 
 def main():
-    model_type, hyperparams = load_tuned_hyperparams()
-    model_type = model_type or "XGBoost"
+    # 1단계(run_stress_sensitivity)가 기본 하이퍼파라미터를 쓰는 것과 동일하게 2단계도 기본값 사용.
+    # 튜닝된 하이퍼파라미터는 baseline 가정에 맞춰진 값이라, 그걸 그대로 쓰면 "feature 자체의
+    # 구조적 취약성"과 "baseline에 과적합된 하이퍼파라미터라 가정이 바뀌면 더 흔들리는 효과"가
+    # 섞여버림 -> 이 stress 테스트 계열(-m stress 포함) 전체가 기본 하이퍼파라미터로 통일.
+    # 코드의 구조적으로 1단계와 2단계가 연결되지는 않지만, 동일한 질문에 대한 해석을 진행하기 위해서는 하이퍼파라미터 통일이 필요했음.
+    model_type = "XGBoost"
     # 원래 질문("Track C 우위가 이 가정에 얼마나 취약한가")에 맞춰 Track C(단말+구조적신호) 21개로 스코프 고정.
     cols = get_feature_columns(track_filter=[Track.DEVICE, Track.DEVICE_STRUCTURAL])
     print(f"model_type={model_type}, Track C feature 수={len(cols)}")
 
-    # 1) Track C만으로 K-Fold 성능(F1/PR-AUC ± SEM) 재산출 — 원래 stress 테스트(전체 25개 기준)와
+    # 1단계) Track C만으로 K-Fold 성능(F1/PR-AUC ± SEM) 재산출 — 원래 stress 테스트(전체 25개 기준)와
     #    비교하기 위한 표. sensitivity_results/stress_is_reliable_url_trackC.json에도 저장됨.
+    # 즉, "is_reliable_url 가정이 무너지면 Track C가 얼마나 흔들리는가"에 대한 "얼마나(성능이 얼마나 떨어지는가)"를 확인하는 단계.
     print("\n" + "=" * 70)
     print("[1] Track C K-Fold 성능 재산출 (run_stress_sensitivity, feature_cols=Track C)")
     print("=" * 70)
@@ -104,7 +109,11 @@ def main():
               f"PR-AUC={s['PR-AUC']['mean']:.4f}±{s['PR-AUC']['sem']:.4f}  "
               f"recall={s['recall']['mean']:.4f}  FN(평균)={cm_mean['FN']}")
 
-    # 2) 레벨별 단일 split 학습 + permutation importance (기존 로직).
+    # 2단계) 레벨별 단일 split 학습 + permutation importance
+    # is_reliable_url과 대체 후보 feature들의 permutation importance가 레벨에 따라 어떻게 변화하는지 보는 단계.
+    # 1단계에서는 fold별 성능 요약만 반환하고 개별 feature의 permutation importance를 계산/보관하지 않기 때문에,
+    # 2단계에서 별도로 레벨마다 train_model() -> evaluate() 호출한 뒤 그 안에서 permutation_importance() 추가로 구함.
+    # "is_reliable_url 가정이 무너지면 Track C가 얼마나 흔들리는가"에 대해 "왜(어떤 feature가 그 빈자리를 메꾸는가)"를 확인하는 단계.
     print("\n" + "=" * 70)
     print("[2] 단일 split 학습 + permutation importance (gain 재해석용)")
     print("=" * 70)
@@ -120,8 +129,8 @@ def main():
         df = prepare_categorical(df)
         train_set, test_set = split_data(df)
 
-        model = train_model(train_set, feature_cols=cols, hyperparams=hyperparams, model_type=model_type)
-        m = evaluate(model, test_set, feature_cols=cols, threshold_df=train_set, pr_auc_method="average_precision")
+        model = train_model(train_set, feature_cols=cols)
+        m = evaluate(model, test_set, feature_cols=cols, threshold_df=train_set)
 
         X_test, y_test = test_set[cols], test_set["is_phishing"]
         perm = permutation_importance(
