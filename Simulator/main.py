@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.inspection import permutation_importance
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical, fit_calibrator
@@ -41,6 +42,10 @@ GEN_SEED = 42              # build_dataset()용 random_state
 CALIBRATION_SPLIT_TRAIN = True
 CALIBRATION_APPLY = True
 CALIBRATION_VAL_SIZE = 0.3  # train_set 중 val_calib(보정용)으로 떼어낼 비율
+
+# run_final(compute_permutation=True)에서 permutation_importance() 반복 횟수(클수록 안정적이지만 느려짐).
+# url_reliability_recheck.py의 PERM_N_REPEATS와 동일한 값 사용.
+PERMUTATION_N_REPEATS = 10
 
 # DataSet/final_dataset 캐시 무효화용 버전. N/GEN_SEED/SUBGROUP_RATIO_KEY/FINAL_SOPHISTICATION은
 # 바뀌면 자동으로 감지되지만(fingerprint 비교), "생성 로직 자체"가 바뀌는 경우(코드는 바뀌었는데
@@ -226,7 +231,7 @@ def get_or_generate_final_dataset():
     return generate_final_dataset()
 
 
-def run_final(split_for_calibration=None, apply_calibrator=None):
+def run_final(split_for_calibration=None, apply_calibrator=None, compute_permutation=False):
     """최종 모드: get_or_generate_final_dataset()으로 dataset 확보(저장된 게 있고 파라미터가
     그대로면 재사용, 아니면 새로 생성) -> split_data() 2분할(train/test) -> optuna_results/
     best_params.json이 있으면 그 모델 종류(XGBoost/LightGBM 중 승자)+하이퍼파라미터를 사용
@@ -248,7 +253,14 @@ def run_final(split_for_calibration=None, apply_calibrator=None):
     없어서 성립하지 않음 -> ValueError.)
 
     A/B/C 세 버전을 비교하면 "학습 데이터가 줄어든 효과"와 "calibration 자체 효과"를 분리해서
-    볼 수 있음(비교1=B-A, 비교2=C-B) -> run_final_calibration_compare() 참고."""
+    볼 수 있음(비교1=B-A, 비교2=C-B) -> run_final_calibration_compare() 참고.
+
+    compute_permutation(기본 False, -m final의 기존 속도/동작에 영향 없음): True면 Track별로
+    test_set 기준 permutation_importance()를 추가 계산해서 evaluate() 결과 dict에
+    "permutation_importance" 키로 붙임. calibrator가 있으면(버전 C) calibrator를, 없으면(버전 A/B)
+    model을 estimator로 씀 -> B/C를 비교하면(둘 다 같은 model이므로) "calibration의 확률 재정렬이
+    feature별 실질 기여도(순위 기반)를 얼마나 바꾸는가"만 순수하게 분리해서 볼 수 있음(gain은 B/C가
+    거의 동일해서 이 비교가 안 됨 -> run_final_calibration_compare() 참고)."""
     if split_for_calibration is None:
         split_for_calibration = CALIBRATION_SPLIT_TRAIN
     if apply_calibrator is None:
@@ -296,7 +308,7 @@ def run_final(split_for_calibration=None, apply_calibrator=None):
         # threshold는 train_sub에서 고르고, 점수는 test에 고정 적용 (낙관 편향 방지)
         # pr_auc_method="average_precision": Track B/C 최종 모델 비교이므로 직선 보간 편향이 없는
         # average_precision_score를 씀(sensitivity_analysis.py의 상대적 우열 비교와는 다른 기준).
-        results[scenario_name] = evaluate(
+        result = evaluate(
             model,
             test_set,
             feature_cols=cols,
@@ -305,14 +317,31 @@ def run_final(split_for_calibration=None, apply_calibrator=None):
             calibrator=calibrator,
         )
 
+        if compute_permutation:
+            # calibrator가 있으면(버전 C) calibrator.predict_proba(), 없으면(버전 A/B) model.predict_proba()
+            # 기준으로 permutation importance를 계산 -> evaluate() 내부의 확률 산출 방식과 동일하게 맞춤.
+            X_test = test_set[cols].copy()
+            cat_cols = X_test.select_dtypes(include="object").columns
+            X_test[cat_cols] = X_test[cat_cols].astype("category")
+            y_test = test_set["is_phishing"]
+            estimator = calibrator if calibrator is not None else model
+            perm = permutation_importance(
+                estimator, X_test, y_test, scoring="average_precision",
+                n_repeats=PERMUTATION_N_REPEATS, random_state=42,
+            )
+            result["permutation_importance"] = {c: round(float(v), 6) for c, v in zip(cols, perm.importances_mean)}
+
+        results[scenario_name] = result
+
     return results
 
 
 _CALIBRATION_RESULTS_DIR = _PROJECT_ROOT / "calibration_results"
 
 # evaluate() 반환값 중 JSON으로 그대로 저장 가능한 스칼라 지표만(confusion_matrix(ndarray)/
-# classification_report(str)/feature_importance(dict)는 제외) -> sensitivity_analysis.py::
-# summarize_fold_results()와 동일한 "스칼라만 저장" 컨벤션.
+# classification_report(str)는 JSON에 못 넣거나 너무 장황해서 제외) -> sensitivity_analysis.py::
+# summarize_fold_results()와 동일한 "스칼라만 저장" 컨벤션. feature_importance(gain)는 아래
+# _version_summary()에서 별도로 붙임(diff 계산 대상은 아니라서 이 튜플에는 안 넣음).
 _FINAL_SCALAR_METRIC_KEYS = (
     "threshold", "accuracy", "precision", "recall", "f1",
     "PR-AUC", "Lift@Top5%", "Lift@Top10%", "Lift@Top20%",
@@ -321,6 +350,22 @@ _FINAL_SCALAR_METRIC_KEYS = (
 
 def _scalar_metrics(result):
     return {k: result[k] for k in _FINAL_SCALAR_METRIC_KEYS}
+
+
+def _version_summary(result):
+    # 9개 스칼라 지표 + gain(feature_importance) + permutation_importance(compute_permutation=True로
+    # run_final() 호출했을 때만 존재)를 함께 반환. 둘 다 diff 대상이 아니라 그대로 값만 저장:
+    #  - gain: B/C는 같은 train_sub로 학습된 사실상 동일한 모델이라(calibration은 학습 후 확률만
+    #    재정렬하는 후처리) 거의 동일하게 나오는 게 정상 -> 비교는 A vs B(학습 데이터가 줄어 트리가
+    #    다르게 자랐는가)에서만 의미 있음.
+    #  - permutation_importance: 반대로 B/C는 같은 model인데 estimator만 다름(model vs calibrator)
+    #    이라, 비교는 B vs C(calibration의 확률 재정렬이 feature별 실질 기여도를 얼마나 바꾸는가)에서
+    #    의미 있음.
+    summary = _scalar_metrics(result)
+    summary["gain_importance"] = {k: round(float(v), 6) for k, v in result["feature_importance"].items()}
+    if "permutation_importance" in result:
+        summary["permutation_importance"] = result["permutation_importance"]
+    return summary
 
 
 def run_final_calibration_compare():
@@ -338,16 +383,20 @@ def run_final_calibration_compare():
         다름 -> 순수하게 "학습 데이터가 줄어든 효과"만 분리해서 봄.
       - 비교2(C - B): 학습 데이터(train_sub)는 완전히 동일하고 calibration 유무만 다름 ->
         순수하게 "calibration 자체 효과"만 분리해서 봄.
-    (비교1 + 비교2 = A와 C를 그냥 통째로 비교했을 때의 전체 차이와 같음.)"""
-    result_a = run_final(split_for_calibration=False, apply_calibrator=False)
-    result_b = run_final(split_for_calibration=True, apply_calibrator=False)
-    result_c = run_final(split_for_calibration=True, apply_calibrator=True)
+    (비교1 + 비교2 = A와 C를 그냥 통째로 비교했을 때의 전체 차이와 같음.)
+
+    gain_importance/permutation_importance도 각 버전에 함께 저장됨(compute_permutation=True) ->
+    해석 방향이 서로 반대이니 주의: gain은 A vs B에서, permutation_importance는 B vs C에서 비교하는
+    게 의미 있음(각각 _version_summary()/모듈 상단 설명 참고)."""
+    result_a = run_final(split_for_calibration=False, apply_calibrator=False, compute_permutation=True)
+    result_b = run_final(split_for_calibration=True, apply_calibrator=False, compute_permutation=True)
+    result_c = run_final(split_for_calibration=True, apply_calibrator=True, compute_permutation=True)
 
     tracks = {}
     for scenario_name in TRACK_SCENARIOS:
-        a = _scalar_metrics(result_a[scenario_name])
-        b = _scalar_metrics(result_b[scenario_name])
-        c = _scalar_metrics(result_c[scenario_name])
+        a = _version_summary(result_a[scenario_name])
+        b = _version_summary(result_b[scenario_name])
+        c = _version_summary(result_c[scenario_name])
         diff1 = {k: round(b[k] - a[k], 4) for k in _FINAL_SCALAR_METRIC_KEYS}
         diff2 = {k: round(c[k] - b[k], 4) for k in _FINAL_SCALAR_METRIC_KEYS}
         tracks[scenario_name] = {
@@ -368,6 +417,14 @@ def run_final_calibration_compare():
             "C": "split_for_calibration=True, apply_calibrator=True — train_sub로 학습 + calibration 적용(현재 운영 방식)",
             "비교1(B-A)": "calibration은 둘 다 없고 학습 데이터 크기만 다름 -> 순수 '학습 데이터 축소' 효과",
             "비교2(C-B)": "학습 데이터(train_sub)는 동일하고 calibration 유무만 다름 -> 순수 'calibration 자체' 효과",
+            "gain_importance 해석 주의": "B/C는 같은 train_sub로 학습된 사실상 동일한 모델(calibration은 "
+                                        "학습 후 확률만 재정렬하는 후처리)이라 gain도 거의 동일하게 나옴 -> "
+                                        "gain 비교는 A vs B(학습 데이터 축소가 트리 구조 자체를 바꾸는가)에서만 의미 있음.",
+            "permutation_importance 해석 주의": "gain과 반대 방향 -> B는 model.predict_proba(), C는 "
+                                                "calibrator.predict_proba() 기준으로 계산되므로, B vs C 비교가 "
+                                                "'calibration의 확률 재정렬이 feature별 실질 기여도(순위 기반)를 "
+                                                "얼마나 바꾸는가'를 보여줌. A vs B는 학습 데이터가 달라 모델 자체가 "
+                                                "다르므로 이쪽은 참고용(순수 비교 아님).",
         },
         "tracks": tracks,
     }
@@ -632,10 +689,12 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
 #                                                     trial 수를 바꾸려면 코드 상단의 TUNE_N_TRIALS 수정.
 #   python -X utf8 -m Simulator.main -m calib_compare
 #                                                  -> run_final()을 A(원본)/B(데이터만 축소)/C(calibration
-#                                                     적용) 3버전으로 실행해서 Track B/C 스칼라 지표를 비교.
-#                                                     calibration_results/final_calibration_compare.json에 저장.
-#                                                     비교1(B-A)=학습 데이터 축소 효과, 비교2(C-B)=calibration
-#                                                     자체 효과로 나눠서 봄(run_final_calibration_compare() 참고).
+#                                                     적용) 3버전으로 실행해서 Track B/C 스칼라 지표+gain+
+#                                                     permutation_importance를 비교. calibration_results/
+#                                                     final_calibration_compare.json에 저장. 비교1(B-A)=학습
+#                                                     데이터 축소 효과, 비교2(C-B)=calibration 자체 효과로
+#                                                     나눠서 봄(gain은 A vs B, permutation_importance는
+#                                                     B vs C 비교가 의미 있음 -> run_final_calibration_compare() 참고).
 #   -m은 --mode의 짧은 별칭.
 if __name__ == "__main__":
     import argparse
