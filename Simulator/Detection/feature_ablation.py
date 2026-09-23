@@ -81,7 +81,9 @@ DEFAULT_VAL_SIZE = 0.2                      # train_set 중 permutation importan
 DEFAULT_PERM_N_REPEATS = 10                 # permutation importance 반복 횟수(우연에 따른 흔들림 줄이기 위해 반복 진행)
 
 # run_feature_selection_pipeline() 실행 결과(2026-09-19, N=100,000)로 확정된 최종 파생 feature 4개.
-# run_stability_check()가 별도 인자 없이 호출되면 이 목록을 기본 검증 대상으로 사용함.
+# 참고용 상수. SCHEMA에 이미 등록되어 get_feature_columns()(=baseline)에 포함되므로
+# run_stability_check()의 feature_sets에 다시 넣으면 안 됨(컬럼 중복). 별도 인자 없이
+# run_stability_check()를 호출하면 기본값은 아래 FINAL이 아니라 CANDIDATE_DERIVED_FEATURES(잔여 9개)다.
 FINAL_CANDIDATE_FEATURES = [
     "structural_phishing_score",
     "is_sms_initiated_unreg",

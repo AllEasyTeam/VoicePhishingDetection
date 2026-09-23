@@ -279,8 +279,10 @@ def run_optuna_tuning_and_compare(X_train, y_train, X_val, y_val, n_trials=50, r
 
 
     return {
-    #    "winner": winner,
-    # pr-auc뿐만이 아니라 전체적으로 판단할 것이기에
+        # val PR-AUC 기준 자동 승자. run_final()의 load_tuned_hyperparams()가 이 필드를 읽음.
+        # Lift 등 다른 지표까지 보고 바꾸려면 best_params.json의 "winner"만 "XGBoost"/"LightGBM"으로
+        # 고치면 되고, 해당 모델의 tuned_hyperparams가 이어서 반영됨.
+        "winner": winner,
         "comparison": comparison,
         "XGBoost": xgb_result,
         "LightGBM": lgb_result,
