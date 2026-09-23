@@ -48,7 +48,8 @@
         ├── optuna_apply.py               # XGBoost/LightGBM 하이퍼파라미터 탐색
         ├── train_eval.py                 # 분할 → 학습 → 평가
         ├── sensitivity_analysis.py       # 파라미터별 민감도/스트레스 분석
-        └── borderline_recheck.py         # -m final 경계선 재확인 (약한 파생 제거·is_global·permutation)
+        ├── borderline_recheck.py         # -m final 경계선 재확인 (약한 파생 제거·is_global·permutation)
+        └── url_reliability_recheck.py    # is_reliable_url stress의 gain 해석을 permutation으로 재검증
 ```
 
 각 파일의 상세 역할과 선언된 함수 목록은 [Structure.md](Structure.md)에 정리돼 있다.
@@ -138,6 +139,14 @@ gain만 보면 Track B에서 `sms_to_call`이 25.3%로 1위처럼 보이지만, 
 1. **약한 파생 2개** (`is_sms_initiated_unreg`, `repeat_pressure_intensity`)를 빼고 재학습: Track B는 F1/PR-AUC가 사실상 동일(F1 +0.002, PR-AUC −0.0007). Track C는 PR-AUC 동일(−0.0001), F1 −0.005·recall −0.010. 이전 K=10 `weak_pair` 결론과 같다. 랭킹 성능은 유지되므로 4개 파생을 SCHEMA에 남겨 둔다.
 2. **`is_global`**: 10만 건 중 2,114건(2.11%)이라 희귀 피처가 아니다. 그러나 `number_type == "00X(국제)"`와 **100% 일치**하고, gain·permutation 모두 0이다. `number_type`이 있으면 완전 중복.
 3. **gain vs permutation**: 위 피처 중요도 절 참고. `cold_contact`는 gain이 B에서 15.8%로 크지만 permutation은 0.010으로 작다. 파생 4개 중 상대적으로 강한 쪽은 `cold_contact`이고, 약한 2개는 최종 모델에서도 기여가 작다.
+
+### `is_reliable_url` stress 재검증 (`url_reliability_recheck.py`)
+
+Track C 우위가 `is_reliable_url`(정상/피싱 URL 신뢰도) 가정에 얼마나 의존하는지, gain이 아니라 permutation importance 기준으로 재확인하는 스크립트. 상세 결과·표는 [Structure.md](Structure.md) 참고.
+
+```
+python -X utf8 -m Simulator.Detection.url_reliability_recheck
+```
 
 ### 파생 feature 검증 (`-m ablation` / `-m ablation_stability`)
 

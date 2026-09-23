@@ -29,7 +29,8 @@
         ├── optuna_apply.py
         ├── train_eval.py         
         ├── sensitivity_analysis.py
-        └── borderline_recheck.py
+        ├── borderline_recheck.py
+        └── url_reliability_recheck.py
 ```
 
 ---
@@ -323,6 +324,54 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 
 ---
 
+### `Detection/url_reliability_recheck.py`
+
+역할: `is_reliable_url` stress 테스트(gain 기반)의 "credit이 다른 feature로 옮겨가서 부분 복구된다"는 해석을, permutation importance로 재확인하는 스크립트. `sms_to_call`/`sms_to_call_gap` 사례에서 확인했듯 gain은 상관된 feature끼리 credit이 쏠리는 착시가 있을 수 있어서, held-out 기준인 permutation으로 다시 검증하기 위함. CLI 모드가 아니라 `python -X utf8 -m Simulator.Detection.url_reliability_recheck`로 실행.
+
+하는 일:
+- `NORMAL_IS_RELIABLE_URL`(1.0→0.5)/`PHISHING_IS_RELIABLE_URL`(0.0→0.5)을 5단계(baseline/mild/moderate/strong/extreme)로 스윕(원래 stress 테스트와 동일한 레벨).
+- Track C(`Track.DEVICE`+`Track.DEVICE_STRUCTURAL`, 21개 — 확정 파생 4개 포함)로 스코프를 고정해 원래 질문("Track C 우위가 이 가정에 얼마나 취약한가")에 맞춤. 원래 stress 테스트는 전체 25개 feature 기준이었음.
+- 각 레벨에서 `is_reliable_url` + gain이 올랐던 "대체 후보" 5개(`msg_number_official_match`/`has_appinstall_link`/`cold_contact`/`structural_phishing_score`/`is_sequential_callers`)의 gain과 permutation importance를 나란히 기록.
+
+최종 산출물: `url_reliability_recheck_results/url_reliability_recheck.json`.
+
+**이 파일은 `Generation/config.py`를 import하지 않아야 함.** (`main.py`의 dataset 캐시·하이퍼파라미터 로더만 사용, config 값 오버라이드는 `sensitivity_analysis._temporary_config_overrides()` 재사용)
+
+---
+
+### `is_reliable_url` stress 재검증 결과 (2026-09-22~23)
+
+**배경**: Track C의 우위가 `is_reliable_url`(정상/피싱 URL 신뢰도) 가정에 얼마나 의존하는지 확인하기 위해, `NORMAL_IS_RELIABLE_URL`/`PHISHING_IS_RELIABLE_URL`을 확정값(1.0/0.0)에서 점점 흐리는 stress 테스트를 새로 만들어 실행함(기존 `url_rate` stress는 "URL 등장 빈도"만 흔들어서 이 질문에 답할 수 없었음).
+
+**성능(K-fold, 전체 25개 feature 기준)**:
+
+| level | F1 | PR-AUC | Recall | FN(평균) |
+|---|---|---|---|---|
+| baseline | 0.957±0.003 | 0.977±0.001 | 0.940 | 11.8 |
+| mild | 0.928±0.005 | 0.962±0.002 | 0.905 | 18.8 |
+| moderate | 0.916±0.004 | 0.954±0.004 | 0.880 | 23.6 |
+| strong | 0.911±0.007 | 0.949±0.005 | 0.877 | 24.2 |
+| extreme | 0.905±0.007 | 0.945±0.005 | 0.872 | 25.2 |
+
+- SEM 대비 baseline→mild 차이가 F1은 5배, PR-AUC는 6.7배 커서 노이즈가 아닌 실제 효과로 판단.
+- 구간별 하락폭(F1 −0.029/−0.012/−0.005/−0.006)을 보면 전체 하락의 절반 이상이 **가장 약한 단계(mild, 5%만 흐림)**에서 이미 발생 — "극단값에서만 위험하다"가 아니라 "mild(baseline보다 현실적인 가정)에서 이미 우위를 상당히 잃는다"로 해석해야 함.
+- FN이 11.8→25.2건(약 2.1배)으로 늘어나는 게, F1 하락폭(~5pt)보다 이 프로젝트의 평가 기준(FN 비용 > FP 비용)에 더 부합하는 요약임.
+
+**permutation importance 재검증(`url_reliability_recheck.py`, Track C 21개 기준)**:
+
+| feature | baseline | mild | moderate | strong | extreme | 판정 |
+|---|---|---|---|---|---|---|
+| `is_reliable_url` | 0.1492 | 0.0347 | 0.0112 | 0.0014 | 0.0004 | (기준) 확실히 붕괴 |
+| `msg_number_official_match` | 0.0372 | 0.0783 | 0.0893 | 0.0983 | 0.0916 | **진짜 대체 확인**(약 2.5배) |
+| `is_sequential_callers` | 0.0208 | 0.0298 | 0.0326 | 0.0401 | 0.0430 | **진짜 대체 확인**(약 2배) |
+| `has_appinstall_link` | 0.00003 | 0.0030 | 0.0052 | 0.0072 | 0.0108 | 오르나 절대값 미미(≤0.011) |
+| `structural_phishing_score` | 0.0064 | 0.0116 | 0.0082 | 0.0206 | 0.0083 | 추세 없음(extreme≈baseline) |
+| `cold_contact` | 0.0037 | 0.0074 | 0.0028 | 0.0032 | 0.0021 | 대체 안 됨(오히려 baseline보다 낮게 끝남) |
+
+**결론**: gain만 보면 5개 후보 전부 credit이 옮겨간 것처럼 보이지만, permutation으로 재확인하면 **`msg_number_official_match`/`is_sequential_callers` 2개만 실제 대체가 확인**되고 나머지 3개는 gain의 착시. Track C 21개 기준으로도 F1이 baseline 0.9378→extreme 0.8969로 같은 "초반 급락 후 정체" 패턴이 재현되어, 전체 feature set 기준 결과와 방향이 일치함(스코프 차이로 인한 결론 변화 없음).
+
+---
+
 ### 최종 학습 결과 (`-m final` + 경계선 재확인, 2026-09-21)
 
 조건: N=100,000, train/test 70/30, 모델 XGBoost(`optuna_results/best_params.json`의 `winner` + `tuned_hyperparams`). Optuna val PR-AUC는 XGBoost 0.9941 > LightGBM 0.9935(Lift@Top1%는 LightGBM이 더 높았으나 PR-AUC 기준으로 XGBoost 채택). `evaluate(pr_auc_method="average_precision")`.
@@ -353,6 +402,7 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 | `feature_stability_results/` | ablation_stability 모드 결과 json(`feature_stability_check.json` — baseline summary + 조합별(`combos`) summary/diff). `feature_selection_results/`와 성격이 달라 별도 폴더로 분리. | `.gitignore` 처리 |
 | `optuna_results/` | tune 모드 결과 json(`best_params.json` — winner 모델+하이퍼파라미터). | `.gitignore` 처리 |
 | `borderline_recheck_results/` | `-m final` 경계선 재확인 json(`borderline_recheck.json` — 약한 파생 제거 비교, `is_global` 빈도, permutation importance). | `.gitignore` 처리 |
+| `url_reliability_recheck_results/` | `is_reliable_url` stress 재검증 json(`url_reliability_recheck.json` — Track C 21개 기준, 레벨별 gain/permutation importance). | `.gitignore` 처리 |
 
 ---
 
