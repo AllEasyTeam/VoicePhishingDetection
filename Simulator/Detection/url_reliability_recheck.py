@@ -1,13 +1,19 @@
-# is_reliable_url stress 결과("다른 feature로 credit이 옮겨가서 부분 복구된다")를
-# gain이 아니라 permutation importance로 재확인하는 스크립트.
-# Track C(지금은 C 원본 17개+파생 4개=21개 feature) 기준.
+# is_reliable_url stress를 "Track C(21개 feature)로 스코프를 좁혀서" 다시 실행하는 스크립트.
+# 원래 진행했던 테스트는 전체 25개 feature 기준이었고, 이 스크립트는 그것과 별개인
+# "Track C 단독 버전" 결과 하나뿐임(전체 25개 버전을 다시 만들지 않음 — 그 결과는 Structure.md에
+# 텍스트로만 남아있음). 아래 2개는 "왜 굳이 Track C로 좁혀서 다시 도는가"에 대한 이유 2가지임
+# (서로 다른 결과물을 각각 만든다는 뜻이 아니라, 이 하나의 실행을 정당화하는 근거 2가지).
 #
-# 배경: is_reliable_url stress 테스트는 gain importance만으로
+# 이유 1(permutation 재확인 필요): is_reliable_url stress 테스트는 gain importance만으로
 #       "msg_number_official_match/has_appinstall_link/cold_contact/structural_phishing_score/
 #       is_sequential_callers로 credit이 옮겨간다"고 해석했음. 그런데 gain은 학습 중 분할에
 #       얼마나 자주 쓰였는지를 보는 지표라, 상관된 feature가 있으면 credit이 한쪽으로
 #       쏠리는 착시가 생길 수 있음(sms_to_call/sms_to_call_gap 사례로 이미 확인됨).
-#       그래서 "진짜 대체"인지 held-out 기준인 permutation importance로 다시 확인.
+#       그래서 "진짜 대체"인지 held-out 기준인 permutation importance로 다시 확인해야 함.
+# 이유 2(Track C로 스코프를 좁혀야 하는 이유): 원래 stress 테스트는 "전체 모델"이 이 가정에
+#       얼마나 취약한지를 봤지만, 원래 질문은 "Track C가 Track B를 앞서는 우위가 이 가정에
+#       얼마나 취약한가"였음. 그래서 이유 1의 permutation 재확인도, K-Fold 성능 재산출도
+#       전부 Track C(21개, `run_stress_sensitivity()`에 feature_cols로 전달)로만 진행함.
 #
 # 실행 (프로젝트 루트):
 #   python -X utf8 -m Simulator.Detection.url_reliability_recheck
@@ -21,7 +27,9 @@ from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
 from Simulator.Detection.derived_features import add_candidate_features
 from Simulator.Detection.train_eval import prepare_categorical, split_data, train_model, evaluate
-from Simulator.Detection.sensitivity_analysis import _temporary_config_overrides
+from Simulator.Detection.sensitivity_analysis import (
+    _temporary_config_overrides, run_stress_sensitivity, summarize_fold_results,
+)
 from Simulator.schema import Track
 from Simulator.schema_utils import get_feature_columns
 from Simulator.main import load_tuned_hyperparams, N, SUBGROUP_RATIO_KEY, GEN_SEED
@@ -60,6 +68,46 @@ def main():
     cols = get_feature_columns(track_filter=[Track.DEVICE, Track.DEVICE_STRUCTURAL])
     print(f"model_type={model_type}, Track C feature 수={len(cols)}")
 
+    # 1) Track C만으로 K-Fold 성능(F1/PR-AUC ± SEM) 재산출 — 원래 stress 테스트(전체 25개 기준)와
+    #    비교하기 위한 표. sensitivity_results/stress_is_reliable_url_trackC.json에도 저장됨.
+    print("\n" + "=" * 70)
+    print("[1] Track C K-Fold 성능 재산출 (run_stress_sensitivity, feature_cols=Track C)")
+    print("=" * 70)
+    stress_summary = run_stress_sensitivity(
+        scenario_key="stress_is_reliable_url_trackC",
+        level_overrides=LEVELS,
+        fixed_config=config,
+        description="is_reliable_url stress를 Track C(21개) feature로만 재검증",
+        n=N,
+        phishing_rate=config.CLASS_IMBALANCE,
+        subgroup_ratio_key=SUBGROUP_RATIO_KEY,
+        gen_seed=GEN_SEED,
+        feature_cols=cols,
+    )
+    stress_perf = {}
+    for entry in stress_summary:
+        s = summarize_fold_results(entry["fold_results"])
+        # confusion_matrix는 summarize_fold_results()가 스칼라가 아니라서 버리는 값이라,
+        # 원본 fold_results(entry["fold_results"])에서 직접 꺼내 fold별 TN/FP/FN/TP 평균을 냄.
+        # sklearn.metrics.confusion_matrix(y_true, y_pred) 관례: [0][0]=TN [0][1]=FP [1][0]=FN [1][1]=TP.
+        cms = [fr["confusion_matrix"] for fr in entry["fold_results"]]
+        tn = [int(cm[0][0]) for cm in cms]
+        fp = [int(cm[0][1]) for cm in cms]
+        fn = [int(cm[1][0]) for cm in cms]
+        tp = [int(cm[1][1]) for cm in cms]
+        cm_mean = {
+            "TN": round(sum(tn) / len(tn), 2), "FP": round(sum(fp) / len(fp), 2),
+            "FN": round(sum(fn) / len(fn), 2), "TP": round(sum(tp) / len(tp), 2),
+        }
+        stress_perf[entry["value"]] = {**s, "confusion_matrix_mean": cm_mean}
+        print(f"  [{entry['value']}] F1={s['f1']['mean']:.4f}±{s['f1']['sem']:.4f}  "
+              f"PR-AUC={s['PR-AUC']['mean']:.4f}±{s['PR-AUC']['sem']:.4f}  "
+              f"recall={s['recall']['mean']:.4f}  FN(평균)={cm_mean['FN']}")
+
+    # 2) 레벨별 단일 split 학습 + permutation importance (기존 로직).
+    print("\n" + "=" * 70)
+    print("[2] 단일 split 학습 + permutation importance (gain 재해석용)")
+    print("=" * 70)
     results = {}
     for level_name, overrides in LEVELS.items():
         with _temporary_config_overrides(config, overrides):
@@ -103,9 +151,15 @@ def main():
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = _OUT_DIR / "url_reliability_recheck.json"
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"model_type": model_type, "track_c_feature_count": len(cols), "levels": LEVELS,
-                    "results": results}, f, ensure_ascii=False, indent=2)
+        json.dump({
+            "model_type": model_type,
+            "track_c_feature_count": len(cols),
+            "levels": LEVELS,
+            "track_c_kfold_performance": stress_perf,  # sensitivity_results/stress_is_reliable_url_trackC.json에도 저장됨
+            "results": results,
+        }, f, ensure_ascii=False, indent=2)
     print(f"\n저장: {out_path}")
+    print(f"저장(K-Fold 원본): sensitivity_results/stress_is_reliable_url_trackC.json")
     return results
 
 
