@@ -185,7 +185,7 @@
 - `save_sensitivity_result(...)`: 결과를 `sensitivity_results/`에 json으로 저장.
 - `run_sensitivity(...)`: 파라미터 하나를 여러 값으로 바꿔가며 `build_dataset()`+`train_eval` 반복 실행(민감도분석 본체). `sen`/`each_sen`/`ratio` 모드가 공통으로 사용.
 - `_temporary_config_overrides(config_module, overrides)`: `config.py`의 특정 값을 일시적으로 덮어썼다가 복원하는 context manager(스윕 중 원본 config 오염 방지).
-- `run_stress_sensitivity(...)`: `STRESS_*_LEVELS`로 특정 feature 값을 극단으로 밀어붙이는 스트레스테스트(`stress` 모드) 실행.
+- `run_stress_sensitivity(..., feature_cols=None)`: `STRESS_*_LEVELS`로 특정 feature 값을 극단으로 밀어붙이는 스트레스테스트(`stress` 모드) 실행. `feature_cols`(2026-09-23 추가)를 넘기면 그 컬럼만으로 학습/평가 — 기본값(None)이면 기존처럼 `get_feature_columns()`(전체)를 씀. `url_reliability_recheck.py`가 Track C(21개)만으로 재검증할 때 이 인자를 씀.
 
 ---
 
@@ -326,14 +326,19 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 
 ### `Detection/url_reliability_recheck.py`
 
-역할: `is_reliable_url` stress 테스트(gain 기반)의 "credit이 다른 feature로 옮겨가서 부분 복구된다"는 해석을, permutation importance로 재확인하는 스크립트. `sms_to_call`/`sms_to_call_gap` 사례에서 확인했듯 gain은 상관된 feature끼리 credit이 쏠리는 착시가 있을 수 있어서, held-out 기준인 permutation으로 다시 검증하기 위함. CLI 모드가 아니라 `python -X utf8 -m Simulator.Detection.url_reliability_recheck`로 실행.
+역할: `-m final`에서 확인된 "Track C가 Track B보다 우위"라는 결론이 `is_reliable_url`(URL 신뢰도) 가정에 얼마나 의존하는지 확인하는 스크립트. `is_reliable_url` stress 테스트를 **Track C(21개 feature)로 스코프를 좁혀서** 재실행하고, 그 과정에서 `is_reliable_url`이 무너질 때 다른 feature가 그 빈자리를 부분적으로 메우는지("부분 복구")를 **2단계로 나눠** 검사함. 원래 실행분(전체 25개 feature 기준, 아래 "① 성능" 표)과는 별개로 **"Track C 단독 버전" 결과 하나만** 만듦 — 전체 25개 버전을 이 스크립트가 다시 만드는 게 아님. Track C로 좁혀서 다시 도는 이유는 두 가지지만 결과물은 하나임:
+1. 원래 질문이 "Track C가 Track B를 앞서는 우위가 이 가정에 얼마나 취약한가"였는데, 전체 모델 기준 결과로는 정확히 답할 수 없었음.
+2. gain만으로 내린 "credit이 다른 feature로 옮겨간다"는 해석이 맞는지, `sms_to_call`/`sms_to_call_gap` 사례처럼 gain의 착시가 아닌지 permutation importance로 재확인해야 했음.
 
-하는 일:
-- `NORMAL_IS_RELIABLE_URL`(1.0→0.5)/`PHISHING_IS_RELIABLE_URL`(0.0→0.5)을 5단계(baseline/mild/moderate/strong/extreme)로 스윕(원래 stress 테스트와 동일한 레벨).
-- Track C(`Track.DEVICE`+`Track.DEVICE_STRUCTURAL`, 21개 — 확정 파생 4개 포함)로 스코프를 고정해 원래 질문("Track C 우위가 이 가정에 얼마나 취약한가")에 맞춤. 원래 stress 테스트는 전체 25개 feature 기준이었음.
-- 각 레벨에서 `is_reliable_url` + gain이 올랐던 "대체 후보" 5개(`msg_number_official_match`/`has_appinstall_link`/`cold_contact`/`structural_phishing_score`/`is_sequential_callers`)의 gain과 permutation importance를 나란히 기록.
+CLI 모드가 아니라 `python -X utf8 -m Simulator.Detection.url_reliability_recheck`로 실행.
 
-최종 산출물: `url_reliability_recheck_results/url_reliability_recheck.json`.
+하는 일 (2단계 구성 — "얼마나 흔들리는가"와 "왜 흔들리는가"를 나눠서 봄):
+- `NORMAL_IS_RELIABLE_URL`(1.0→0.5)/`PHISHING_IS_RELIABLE_URL`(0.0→0.5)을 5단계(baseline/mild/moderate/strong/extreme)로 스윕(원래 stress 테스트와 동일한 레벨). Track C(`Track.DEVICE`+`Track.DEVICE_STRUCTURAL`, 21개 — 확정 파생 4개 포함)로 스코프 고정.
+- **[1단계 — 얼마나]** `sensitivity_analysis.run_stress_sensitivity(..., feature_cols=Track C 21개)`로 Track C만의 K-Fold 성능(F1/PR-AUC 등 ± SEM)을 재산출. 각 fold의 `confusion_matrix`에서 TN/FP/FN/TP 평균도 직접 뽑아 붙임(`summarize_fold_results()`는 스칼라만 남기고 버리므로 원본 `fold_results`에서 따로 추출). 이 K-Fold 결과는 `sensitivity_results/stress_is_reliable_url_trackC.json`에도 자동 저장되지만, 그 파일엔 FN이 없음(9개 스칼라만 — 프로젝트 공통 저장 포맷).
+- **[2단계 — 왜]** 레벨별로 단일 70/30 split 학습 후, `is_reliable_url` + gain이 올랐던 "대체 후보" 5개(`msg_number_official_match`/`has_appinstall_link`/`cold_contact`/`structural_phishing_score`/`is_sequential_callers`)가 `is_reliable_url`의 빈자리를 진짜로 부분 복구하는지 gain과 permutation importance를 나란히 기록해 비교. `run_stress_sensitivity()`는 fold별 성능 요약만 반환하고 개별 feature의 permutation importance는 계산/보관하지 않으므로, 1단계와 별개로 `train_model()`→`evaluate()`를 직접 호출한 뒤 `permutation_importance()`를 추가로 구함.
+- 1단계·2단계는 서로 데이터를 주고받진 않지만(코드상 독립) 같은 모델을 두 각도(성능/feature 기여도)에서 보는 것으로 **함께 해석**되므로, 하이퍼파라미터(둘 다 기본값)·PR-AUC 계산 방식(둘 다 사다리꼴, `train_eval.py::pr_auc()`)을 동일하게 맞춤(2026-09-23) — 기준이 다른 두 모델의 결과를 하나의 이야기로 엮어 읽는 걸 방지.
+
+최종 산출물: `url_reliability_recheck_results/url_reliability_recheck.json`(1단계 K-Fold 성능+FN, 2단계 gain/permutation 전부 포함).
 
 **이 파일은 `Generation/config.py`를 import하지 않아야 함.** (`main.py`의 dataset 캐시·하이퍼파라미터 로더만 사용, config 값 오버라이드는 `sensitivity_analysis._temporary_config_overrides()` 재사용)
 
@@ -343,7 +348,11 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 
 **배경**: Track C의 우위가 `is_reliable_url`(정상/피싱 URL 신뢰도) 가정에 얼마나 의존하는지 확인하기 위해, `NORMAL_IS_RELIABLE_URL`/`PHISHING_IS_RELIABLE_URL`을 확정값(1.0/0.0)에서 점점 흐리는 stress 테스트를 새로 만들어 실행함(기존 `url_rate` stress는 "URL 등장 빈도"만 흔들어서 이 질문에 답할 수 없었음).
 
-**성능(K-fold, 전체 25개 feature 기준)**:
+아래는 서로 다른 두 번의 실행 결과임(한 스크립트/파일에서 둘 다 나온 게 아님 — 혼동하기 쉬운 부분이라 명시):
+- **① 전체 25개 feature 기준**: 처음 실행한 stress 테스트 결과. 스크립트로 저장된 적 없이 아래 표로만 기록돼 있음.
+- **② Track C 21개 기준**: `url_reliability_recheck.py`(2026-09-23 추가)로 ①을 "Track C만 놓고 보면 어떤가"로 다시 실행한 결과. `url_reliability_recheck_results/url_reliability_recheck.json` + `sensitivity_results/stress_is_reliable_url_trackC.json`에 저장됨.
+
+**① 성능(K-fold, 전체 25개 feature 기준)**:
 
 | level | F1 | PR-AUC | Recall | FN(평균) |
 |---|---|---|---|---|
@@ -357,7 +366,19 @@ baseline(21개) vs final(21+4개, 25개)을 같은 fold 안에서 10회 반복 �
 - 구간별 하락폭(F1 −0.029/−0.012/−0.005/−0.006)을 보면 전체 하락의 절반 이상이 **가장 약한 단계(mild, 5%만 흐림)**에서 이미 발생 — "극단값에서만 위험하다"가 아니라 "mild(baseline보다 현실적인 가정)에서 이미 우위를 상당히 잃는다"로 해석해야 함.
 - FN이 11.8→25.2건(약 2.1배)으로 늘어나는 게, F1 하락폭(~5pt)보다 이 프로젝트의 평가 기준(FN 비용 > FP 비용)에 더 부합하는 요약임.
 
-**permutation importance 재검증(`url_reliability_recheck.py`, Track C 21개 기준)**:
+**② 성능(K-fold, Track C 21개 기준, `url_reliability_recheck.py` 1단계)**:
+
+| level | F1 | PR-AUC | Recall | FN(평균) |
+|---|---|---|---|---|
+| baseline | 0.955±0.003 | 0.977±0.001 | 0.936 | 12.6 |
+| mild | 0.928±0.003 | 0.962±0.002 | 0.902 | 19.4 |
+| moderate | 0.921±0.005 | 0.955±0.004 | 0.891 | 21.6 |
+| strong | 0.912±0.007 | 0.950±0.005 | 0.880 | 23.6 |
+| extreme | 0.910±0.008 | 0.946±0.006 | 0.876 | 24.4 |
+
+①(전체 25개)과 방향·패턴이 거의 동일함(baseline→mild 구간에서 하락 대부분 발생, FN이 baseline 대비 약 2배로 증가) — **스코프를 Track C로 좁혀도 결론이 바뀌지 않음**을 확인.
+
+**② permutation importance 재검증(`url_reliability_recheck.py` 2단계, Track C 21개 기준)**:
 
 | feature | baseline | mild | moderate | strong | extreme | 판정 |
 |---|---|---|---|---|---|---|

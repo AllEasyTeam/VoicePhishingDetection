@@ -189,6 +189,8 @@ def run_stress_sensitivity(
     gen_seed: int = 42,
     fold_seed: int = 7,
     k: int = 5,
+    feature_cols: Optional[List[str]] = None,  # None이면 기존처럼 get_feature_columns()(전체) 사용.
+                                                # Track 등으로 스코프를 좁히고 싶을 때만 명시.
 ):
     """가정-파괴(stress) / θ·확률 재정의 민감도.
 
@@ -202,6 +204,9 @@ def run_stress_sensitivity(
     - scenario_key: 저장 파일명 stem (예: stress_num_in_msg)
     - level_overrides: {level_name: {CONFIG_ATTR: value, ...}}
       예) {"baseline": {"NORMAL_IS_NUM_IN_MSG": {...}}, "extreme": {...}}
+    - feature_cols: 특정 Track(예: Track C만)으로 스코프를 좁혀서 스윕하고 싶을 때 명시.
+      (예: url_reliability_recheck.py가 "Track C 우위가 이 가정에 얼마나 취약한가"를 보기 위해
+      get_feature_columns(track_filter=[Track.DEVICE, Track.DEVICE_STRUCTURAL])를 넘김)
     """
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=fold_seed)
     summary = []
@@ -222,15 +227,16 @@ def run_stress_sensitivity(
         # 실제로 그 컬럼들이 있어야 함 -> K-Fold로 나뉘기 전에 미리 계산해서 추가.
         df = add_candidate_features(df)
         df = prepare_categorical(df)
-        X = df[get_feature_columns()]
+        cols = feature_cols or get_feature_columns()
+        X = df[cols]
         y = df["is_phishing"]
 
         fold_results = []
         for train_idx, val_idx in skf.split(X, y):
             train_fold = df.iloc[train_idx]
             val_fold = df.iloc[val_idx]
-            model = train_model(train_fold)
-            fold_results.append(evaluate(model, val_fold, threshold_df=train_fold))
+            model = train_model(train_fold, feature_cols=cols)
+            fold_results.append(evaluate(model, val_fold, feature_cols=cols, threshold_df=train_fold))
 
         summary.append({
             "param_name": scenario_key,
