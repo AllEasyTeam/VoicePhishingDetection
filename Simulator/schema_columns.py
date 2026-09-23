@@ -53,7 +53,7 @@ SCHEMA: list[ColumnSchema] = [
                  nullable=True,
                  depends_on="is_num_in_msg=0이면 비교대상 없음(NaN)"),  # 사건 내 그런 일치가 있었는지(존재 여부)
 
-    ColumnSchema("sms_to_call", "문자→통화 연계 여부", ValueType.BINARY, Track.DEVICE),  # 이 사건 전체 요약
+    ColumnSchema("sms_to_call", "문자→통화 연계 여부", ValueType.BINARY, Track.DEVICE, is_feature=False),  # 이 사건 전체 요약
 
     ColumnSchema("sms_to_call_gap", "문자→통화 전환 간격(분 단위)",
                  ValueType.CONTINUOUS_TIME, Track.DEVICE,
@@ -88,7 +88,7 @@ SCHEMA: list[ColumnSchema] = [
                  ValueType.CONTINUOUS_COUNT, Track.CARRIER, nullable=True,
                  depends_on="통신사 실측자료 있는 사건만 값 존재, 대부분 NaN"),
 
-    ColumnSchema("is_global", "국제번호 여부", ValueType.BINARY, Track.DEVICE),  # 대표번호 기준
+    ColumnSchema("is_global", "국제번호 여부", ValueType.BINARY, Track.DEVICE, is_feature=False),  # 대표번호 기준
 
     ColumnSchema("is_sequential_callers", "순차복수사칭 여부", ValueType.BINARY, Track.DEVICE),  # 이 사건 안 복수번호 릴레이 여부
 
