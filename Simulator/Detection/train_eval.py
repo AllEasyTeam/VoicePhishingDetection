@@ -14,6 +14,7 @@ from sklearn.metrics import (
     average_precision_score,
 )
 from sklearn.model_selection import train_test_split
+from sklearn.calibration import CalibratedClassifierCV
 from Simulator.schema_utils import get_feature_columns, get_non_feature_columns
 
 
@@ -171,7 +172,7 @@ def train_model(df, val=None, feature_cols=None, hyperparams=None, model_type="X
     return model
 
 
-def evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="trapezoidal"):
+def evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="trapezoidal", calibrator=None):
     # 평가를 위한 함수.
     # accuracy / precision / recall / F1 / confusion_matrix / feature importance 반환.
     # feature_cols: train_model()과 동일한 컬럼 목록을 넘겨야 함(Track 시나리오 일치 필요).
@@ -180,6 +181,10 @@ def evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="tra
     #                "average_precision"(average_precision_score, 직선 보간이 없어 모델/조합 간 비교에 더 적합).
     #                기본값은 sensitivity_analysis.py(상대적 우열 비교)를 그대로 둔 채, feature_ablation.py의
     #                파생 feature 비교와 main.py::run_final()의 최종 모델 비교에서만 "average_precision"을 명시.
+    # calibrator: fit_calibrator()가 반환한 CalibratedClassifierCV(선택). 넘기면 model.predict_proba()
+    #             대신 calibrator.predict_proba()로 확률을 뽑음(threshold 탐색·평가 양쪽 다 동일하게 적용).
+    #             None(기본값)이면 기존과 완전히 동일하게 동작(하위 호환) -> calibration 적용 전/후를
+    #             같은 함수로 그대로 비교 가능(main.py::run_final(use_calibration=...) 참고).
     if pr_auc_method not in ("trapezoidal", "average_precision"):
         raise ValueError(f"알 수 없는 pr_auc_method: {pr_auc_method!r}. 'trapezoidal' 또는 'average_precision'이어야 함.")
     feature_cols = _resolve_feature_cols(feature_cols)
@@ -211,7 +216,8 @@ def evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="tra
 
     thr_frame = threshold_df if threshold_df is not None else df
     X_thr, y_thr = _prepare_xy(thr_frame)
-    proba_thr = model.predict_proba(X_thr)[:, 1]
+    # calibrator가 있으면 보정된 확률을, 없으면 원본 model 확률을 씀(threshold 탐색·평가 동일 기준 적용).
+    proba_thr = calibrator.predict_proba(X_thr)[:, 1] if calibrator is not None else model.predict_proba(X_thr)[:, 1]
     precisions, recalls, thresholds = precision_recall_curve(y_thr, proba_thr)
     # precision_recall_curve는 precision/recall을 thresholds보다 1개 더 많이 반환함
     # (마지막 지점은 threshold 없이 recall=0 지점) -> 그 마지막 지점은 탐색에서 제외.
@@ -223,7 +229,7 @@ def evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="tra
         f1_scores = 2 * (precisions[:-1] * recalls[:-1]) / (precisions[:-1] + recalls[:-1] + 1e-10)
         best_threshold = float(thresholds[f1_scores.argmax()])
 
-    proba = model.predict_proba(X)[:, 1]  # 평가셋 피싱(1) 확률
+    proba = calibrator.predict_proba(X)[:, 1] if calibrator is not None else model.predict_proba(X)[:, 1]  # 평가셋 피싱(1) 확률
     pred = (proba >= best_threshold).astype(int)
 
     lift_5p = lift_at_top_k(y, proba, k=0.05)
@@ -249,3 +255,30 @@ def evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="tra
         "Lift@Top10%": lift_10p,
         "Lift@Top20%": lift_20p,
     }
+
+
+def fit_calibrator(model, val_df, feature_cols, target_col="is_phishing", method="isotonic"):
+    # scale_pos_weight 보정 때문에 왜곡된 model 확률을, 실제 발생 빈도에 가까운 확률로
+    # 재정렬하는 보정기(CalibratedClassifierCV)를 적합. model은 이미 학습이 끝난 상태여야 하고,
+    # val_df는 model 학습에 쓰이지 않은 별도 데이터여야 함(같은 데이터로 보정하면 model의
+    # 과적합까지 "잘 보정된 것"처럼 왜곡됨).
+    # method: "isotonic"(비모수, 표본이 충분할 때 권장) 또는 "sigmoid"(Platt scaling, 표본이 적을 때).
+    feature_cols = _resolve_feature_cols(feature_cols)
+    X_val = val_df[feature_cols].copy()
+    cat_cols = X_val.select_dtypes(include="object").columns
+    X_val[cat_cols] = X_val[cat_cols].astype("category")
+    y_val = val_df[target_col]
+
+    try:
+        # scikit-learn 1.6+ : FrozenEstimator로 이미 학습된 model을 그대로 감싸서 재학습 없이 보정.
+        from sklearn.frozen import FrozenEstimator
+        calibrated_model = CalibratedClassifierCV(estimator=FrozenEstimator(model), method=method, cv=None)
+    except ImportError:
+        # scikit-learn <1.6(FrozenEstimator 없음): cv="prefit"이 "이미 학습된 model을 그대로 보정"
+        # 이라는 뜻(1.6+에서 deprecated 되었을 뿐, 아직 동작은 함). 주의: 여기서 cv=None을 쓰면
+        # "prefit 모델을 그대로 써라"가 아니라 "기본 K-fold로 model을 처음부터 다시 학습해라"는
+        # 뜻이 되어버려(문서 기준) 완전히 다른(그리고 잘못된) 동작을 하게 됨 -> 반드시 "prefit"이어야 함.
+        calibrated_model = CalibratedClassifierCV(estimator=model, method=method, cv="prefit")
+
+    calibrated_model.fit(X_val, y_val)
+    return calibrated_model

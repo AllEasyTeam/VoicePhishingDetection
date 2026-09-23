@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from Simulator.Generation import config
 from Simulator.Generation.dataset_builder import build_dataset
-from Simulator.Detection.train_eval_cali import split_data, train_model, evaluate, prepare_categorical,fit_calibrator
+from Simulator.Detection.train_eval import split_data, train_model, evaluate, prepare_categorical, fit_calibrator
 from Simulator.Detection.sensitivity_analysis import run_sensitivity, run_stress_sensitivity
 from Simulator.Detection.feature_ablation import (
     run_feature_selection_pipeline,
@@ -29,6 +29,18 @@ _TUNE_RESULTS_DIR = _PROJECT_ROOT / "optuna_results"
 N = 100000                  # 생성할 사건 수
 SUBGROUP_RATIO_KEY = "D"   # 정상 이벤트 하위집단(지인/기관) 비중 키 (민감도 분석 결과 B->D로 확정)
 GEN_SEED = 42              # build_dataset()용 random_state
+
+# confidence calibration(isotonic) 관련 스위치 2개. 하나로 합쳐두면 "학습 데이터가 줄어드는 효과"와
+# "calibration 자체 효과"가 뒤섞여서 비교가 안 되므로(run_final_calibration_compare() 참고),
+# 독립적으로 켜고 끌 수 있게 분리함:
+#   CALIBRATION_SPLIT_TRAIN: train_set을 train_sub/val_calib으로 나눌지(=학습 데이터를 줄일지) 여부
+#   CALIBRATION_APPLY      : val_calib으로 calibrator를 적합해서 evaluate()에 넘길지 여부
+#                            (True면 CALIBRATION_SPLIT_TRAIN도 반드시 True여야 함 -> run_final() 참고)
+# 기본(True/True)은 현재 운영 중인 방식과 동일. run_final(split_for_calibration=..., apply_calibrator=...)
+# 로 직접 override해서 세 버전(아래 A/B/C)을 나란히 비교할 수 있음(CLI -m final은 이 상수값을 그대로 씀).
+CALIBRATION_SPLIT_TRAIN = True
+CALIBRATION_APPLY = True
+CALIBRATION_VAL_SIZE = 0.3  # train_set 중 val_calib(보정용)으로 떼어낼 비율
 
 # DataSet/final_dataset 캐시 무효화용 버전. N/GEN_SEED/SUBGROUP_RATIO_KEY/FINAL_SOPHISTICATION은
 # 바뀌면 자동으로 감지되지만(fingerprint 비교), "생성 로직 자체"가 바뀌는 경우(코드는 바뀌었는데
@@ -214,26 +226,60 @@ def get_or_generate_final_dataset():
     return generate_final_dataset()
 
 
-def run_final():
+def run_final(split_for_calibration=None, apply_calibrator=None):
     """최종 모드: get_or_generate_final_dataset()으로 dataset 확보(저장된 게 있고 파라미터가
     그대로면 재사용, 아니면 새로 생성) -> split_data() 2분할(train/test) -> optuna_results/
     best_params.json이 있으면 그 모델 종류(XGBoost/LightGBM 중 승자)+하이퍼파라미터를 사용
     (없으면 train_model() 기본값=XGBoost) -> Track 시나리오(B/C)별로 feature만 다르게 골라
-    train_model()/evaluate() 반복."""
+    train_model()/evaluate() 반복.
+
+    split_for_calibration/apply_calibrator: 각각 None(기본)이면 모듈 상단의
+    CALIBRATION_SPLIT_TRAIN/CALIBRATION_APPLY 상수를 따름. 명시적으로 넘기면 그 값으로 override.
+    두 스위치를 독립적으로 조합하면 아래 세 버전을 만들 수 있음(둘 다 True인 조합이 현재 운영 방식):
+      - A(원본)        : split_for_calibration=False, apply_calibrator=False
+                         -> train_set 전체로 학습, threshold도 train_set에서 탐색, calibrator 없음.
+      - B(데이터만 축소): split_for_calibration=True,  apply_calibrator=False
+                         -> train_set을 train_sub/val_calib으로 나눠 train_sub로만 학습(C와
+                         동일한 크기)하지만, val_calib으로 calibrator는 적합하지 않음.
+      - C(calibration) : split_for_calibration=True,  apply_calibrator=True
+                         -> B와 동일하게 학습하고, val_calib으로 적합한 calibrator를 evaluate()에
+                         넘김(threshold 탐색·최종 평가 모두 calibrator를 통과한 확률을 씀).
+    (split_for_calibration=False, apply_calibrator=True 조합은 calibrator를 적합할 val_calib이
+    없어서 성립하지 않음 -> ValueError.)
+
+    A/B/C 세 버전을 비교하면 "학습 데이터가 줄어든 효과"와 "calibration 자체 효과"를 분리해서
+    볼 수 있음(비교1=B-A, 비교2=C-B) -> run_final_calibration_compare() 참고."""
+    if split_for_calibration is None:
+        split_for_calibration = CALIBRATION_SPLIT_TRAIN
+    if apply_calibrator is None:
+        apply_calibrator = CALIBRATION_APPLY
+    if apply_calibrator and not split_for_calibration:
+        raise ValueError(
+            "apply_calibrator=True이려면 split_for_calibration=True여야 함"
+            "(calibrator를 적합할 val_calib이 필요)."
+        )
+
     df = get_or_generate_final_dataset()
 
     df = prepare_categorical(df)  # train/test로 나뉘기 전에 category dtype 한 번만 확정
 
     train_set, test_set = split_data(df) # train/test 2분할
 
-    # confidence calibration을 활용하면 보정용 데이터를 train에서 다시 한번 더 나누어야함.
-    # 2. [추가] 1% 극단적 불균형을 유지하며 Train 데이터를 학습용(80%)과 보정용(20%)으로 재분할
-    train_sub, val_calib = train_test_split(
-        train_set, 
-        test_size=0.3, 
-        random_state=42, 
-        stratify=train_set["is_phishing"]
-    )
+    if split_for_calibration:
+        # calibrator 적합용 데이터를 train_set에서 별도로 떼어냄(model 학습에 안 쓰인 데이터여야
+        # calibration이 model의 과적합까지 "잘 보정된 것"처럼 왜곡하지 않음).
+        # apply_calibrator=False(버전 B)라도 이 분할 자체는 그대로 해야 A와 비교했을 때 "데이터 축소
+        # 효과"만 순수하게 분리됨 -> val_calib은 만들어두되 calibrator 적합에만 안 씀.
+        train_sub, val_calib = train_test_split(
+            train_set,
+            test_size=CALIBRATION_VAL_SIZE,
+            random_state=42,
+            stratify=train_set["is_phishing"],
+        )
+    else:
+        # 데이터를 안 나누면 val_calib을 떼어낼 이유가 없음 -> train_set 전체를 그대로 학습에 씀
+        # (calibration 적용 전 기존 동작과 완전히 동일 = 버전 A).
+        train_sub, val_calib = train_set, None
 
     model_type, tuned_hyperparams = load_tuned_hyperparams()  # 없으면 (None, None) -> 기본값 사용
     model_type = model_type or "XGBoost"
@@ -242,41 +288,96 @@ def run_final():
     for scenario_name, tracks in TRACK_SCENARIOS.items():
         # TRACK_SCENARIOS 개수만큼 반복. (Track별로 다른 모델 생성 및 평가 진행)
         cols = get_feature_columns(track_filter=tracks)
-    #    model = train_model(train_set, feature_cols=cols, hyperparams=tuned_hyperparams, model_type=model_type)
-        # threshold는 train에서 고르고, 점수는 test에 고정 적용 (낙관 편향 방지)
+
+        model = train_model(train_sub, feature_cols=cols, hyperparams=tuned_hyperparams, model_type=model_type)
+
+        calibrator = fit_calibrator(model, val_calib, feature_cols=cols, method="isotonic") if apply_calibrator else None
+
+        # threshold는 train_sub에서 고르고, 점수는 test에 고정 적용 (낙관 편향 방지)
         # pr_auc_method="average_precision": Track B/C 최종 모델 비교이므로 직선 보간 편향이 없는
         # average_precision_score를 씀(sensitivity_analysis.py의 상대적 우열 비교와는 다른 기준).
-     #   results[scenario_name] = evaluate(
-      #      model, test_set, feature_cols=cols, threshold_df=train_set, pr_auc_method="average_precision", calibrator=calibrator
-      #  )
-
-        # 3. [수정] 전체 train_set이 아닌 train_sub로 XGBoost 모델 학습
-        model = train_model(
-            train_sub, 
-            feature_cols=cols, 
-            hyperparams=tuned_hyperparams, 
-            model_type=model_type
-        )
-
-        # 4. [추가] 분리해둔 val_calib로 Confidence Calibrator 적합 (확률 왜곡 보정)
-        calibrator = fit_calibrator(
-            model, 
-            val_calib, 
-            feature_cols=cols, 
-            method="isotonic"
-        )
-
-        # 5. 최종 평가 시 calibrator 연동 및 threshold_df 변경
         results[scenario_name] = evaluate(
-            model, 
-            test_set, 
-            feature_cols=cols, 
-            threshold_df=train_sub, 
-            pr_auc_method="average_precision", 
-            calibrator=calibrator
+            model,
+            test_set,
+            feature_cols=cols,
+            threshold_df=train_sub,
+            pr_auc_method="average_precision",
+            calibrator=calibrator,
         )
 
     return results
+
+
+_CALIBRATION_RESULTS_DIR = _PROJECT_ROOT / "calibration_results"
+
+# evaluate() 반환값 중 JSON으로 그대로 저장 가능한 스칼라 지표만(confusion_matrix(ndarray)/
+# classification_report(str)/feature_importance(dict)는 제외) -> sensitivity_analysis.py::
+# summarize_fold_results()와 동일한 "스칼라만 저장" 컨벤션.
+_FINAL_SCALAR_METRIC_KEYS = (
+    "threshold", "accuracy", "precision", "recall", "f1",
+    "PR-AUC", "Lift@Top5%", "Lift@Top10%", "Lift@Top20%",
+)
+
+
+def _scalar_metrics(result):
+    return {k: result[k] for k in _FINAL_SCALAR_METRIC_KEYS}
+
+
+def run_final_calibration_compare():
+    """run_final()을 A(원본)/B(데이터만 축소)/C(calibration 적용) 세 버전으로 실행해서 Track B/C별
+    스칼라 지표를 비교. calibration_results/final_calibration_compare.json에 저장.
+
+    A/B/C의 정확한 정의는 run_final()의 docstring 참고 — 요약하면:
+      - A: train_set 100%로 학습, calibration 없음 (기존 방식)
+      - B: train_sub(C와 동일 크기)로 학습, calibration은 적용 안 함
+      - C: train_sub로 학습 + calibration 적용 (현재 운영 방식)
+
+    off/on(A/C) 하나만 비교하면 "학습 데이터가 줄어든 효과"와 "calibration 자체 효과"가 뒤섞여서
+    어느 쪽 때문에 지표가 달라졌는지 알 수 없음 -> 비교를 2단계로 나눔:
+      - 비교1(B - A): calibration은 둘 다 없고 학습 데이터 크기(train_set 100% vs train_sub)만
+        다름 -> 순수하게 "학습 데이터가 줄어든 효과"만 분리해서 봄.
+      - 비교2(C - B): 학습 데이터(train_sub)는 완전히 동일하고 calibration 유무만 다름 ->
+        순수하게 "calibration 자체 효과"만 분리해서 봄.
+    (비교1 + 비교2 = A와 C를 그냥 통째로 비교했을 때의 전체 차이와 같음.)"""
+    result_a = run_final(split_for_calibration=False, apply_calibrator=False)
+    result_b = run_final(split_for_calibration=True, apply_calibrator=False)
+    result_c = run_final(split_for_calibration=True, apply_calibrator=True)
+
+    tracks = {}
+    for scenario_name in TRACK_SCENARIOS:
+        a = _scalar_metrics(result_a[scenario_name])
+        b = _scalar_metrics(result_b[scenario_name])
+        c = _scalar_metrics(result_c[scenario_name])
+        diff1 = {k: round(b[k] - a[k], 4) for k in _FINAL_SCALAR_METRIC_KEYS}
+        diff2 = {k: round(c[k] - b[k], 4) for k in _FINAL_SCALAR_METRIC_KEYS}
+        tracks[scenario_name] = {
+            "A_original(train_set 100%, calibration 없음)": a,
+            "B_data_reduced_only(train_sub, calibration 없음)": b,
+            "C_calibrated(train_sub, calibration 적용)": c,
+            "비교1_diff(B-A, 학습 데이터 축소 효과)": diff1,
+            "비교2_diff(C-B, calibration 자체 효과)": diff2,
+        }
+
+    payload = {
+        "description": "run_final()을 A(원본)/B(데이터만 축소)/C(calibration 적용) 3버전으로 실행해 "
+                        "'학습 데이터 축소 효과'와 'calibration 자체 효과'를 분리해서 비교",
+        "calibration_val_size": CALIBRATION_VAL_SIZE,
+        "설명": {
+            "A": "split_for_calibration=False, apply_calibrator=False — train_set 100%로 학습, calibration 없음(기존 방식)",
+            "B": "split_for_calibration=True, apply_calibrator=False — train_sub로 학습(C와 동일 크기), calibration은 적용 안 함",
+            "C": "split_for_calibration=True, apply_calibrator=True — train_sub로 학습 + calibration 적용(현재 운영 방식)",
+            "비교1(B-A)": "calibration은 둘 다 없고 학습 데이터 크기만 다름 -> 순수 '학습 데이터 축소' 효과",
+            "비교2(C-B)": "학습 데이터(train_sub)는 동일하고 calibration 유무만 다름 -> 순수 'calibration 자체' 효과",
+        },
+        "tracks": tracks,
+    }
+
+    _CALIBRATION_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _CALIBRATION_RESULTS_DIR / "final_calibration_compare.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    return payload
 
 
 def run_sensitivity_mode():
@@ -474,6 +575,8 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
         result = run_ablation_stability_mode()
     elif mode == "tune":
         result = run_tuning_mode()
+    elif mode == "calib_compare":
+        result = run_final_calibration_compare()
     else:
         raise ValueError(f"알 수 없는 mode: {mode}")
 
@@ -527,6 +630,12 @@ def main(mode: str, param_name=None, k=None, scenario_key=None):
 #                                                     결과는 optuna_results/best_params.json에 저장되고,
 #                                                     이후 -m final을 돌리면 winner 모델+하이퍼파라미터가 자동 반영됨.
 #                                                     trial 수를 바꾸려면 코드 상단의 TUNE_N_TRIALS 수정.
+#   python -X utf8 -m Simulator.main -m calib_compare
+#                                                  -> run_final()을 A(원본)/B(데이터만 축소)/C(calibration
+#                                                     적용) 3버전으로 실행해서 Track B/C 스칼라 지표를 비교.
+#                                                     calibration_results/final_calibration_compare.json에 저장.
+#                                                     비교1(B-A)=학습 데이터 축소 효과, 비교2(C-B)=calibration
+#                                                     자체 효과로 나눠서 봄(run_final_calibration_compare() 참고).
 #   -m은 --mode의 짧은 별칭.
 if __name__ == "__main__":
     import argparse
@@ -534,7 +643,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Voice Phishing Detection 시뮬레이터 파이프라인 실행")
     parser.add_argument(
         "-m", "--mode", default="final",
-        choices=["generate", "final", "sen", "each_sen", "ratio", "stress", "ablation", "ablation_stability", "tune"],
+        choices=["generate", "final", "sen", "each_sen", "ratio", "stress", "ablation", "ablation_stability", "tune", "calib_compare"],
         help="실행 모드 (기본값: final)",
     )
     args = parser.parse_args()

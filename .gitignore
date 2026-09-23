@@ -23,3 +23,6 @@ borderline_recheck_results/
 
 # is_reliable_url stress 결과의 gain vs permutation 재확인 결과물 (코드 실행하면 로컬에서 다시 생성됨, 커밋 대상 아님)
 url_reliability_recheck_results/
+
+# confidence calibration 결과물 (reliability diagram, calibration on/off 비교 json — 코드 실행하면 로컬에서 다시 생성됨, 커밋 대상 아님)
+calibration_results/

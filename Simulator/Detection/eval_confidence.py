@@ -5,7 +5,7 @@ from sklearn.calibration import calibration_curve
 from sklearn.model_selection import train_test_split
 
 from Simulator.main import get_or_generate_final_dataset, load_tuned_hyperparams
-from Simulator.Detection.train_eval_cali import (
+from Simulator.Detection.train_eval import (
     split_data,
     prepare_categorical,
     train_model,

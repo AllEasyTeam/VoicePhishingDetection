@@ -28,6 +28,7 @@
         ├── feature_ablation.py
         ├── optuna_apply.py
         ├── train_eval.py         
+        ├── eval_confidence.py
         ├── sensitivity_analysis.py
         ├── borderline_recheck.py
         └── url_reliability_recheck.py
@@ -60,6 +61,7 @@
 - ablation 모드 : 파생 feature 검증 및 최종 후보 확정을 위한 pipeline 실행.
 - ablation_stability 모드 : ablation 모드로 이미 확정된 최종 파생 feature 조합의 성능 차이가 노이즈인지 K-Fold로 재검증.
 - tune 모드 : Optuna로 XGBoost/LightGBM 둘 다 하이퍼파라미터 탐색 후 val PR-AUC 더 높은 쪽(winner)을 선택
+- calib_compare 모드(2026-09-23 추가) : `run_final()`을 A(원본)/B(데이터만 축소)/C(calibration 적용) 3버전으로 실행해서 "학습 데이터 축소 효과"와 "calibration 자체 효과"를 분리해서 비교(왜 나눠야 하는지는 아래 "confidence calibration(A/B/C 분리)" 참고).
 
 주의: `main.py`는 `Generation/config.py`를 직접 import해도 됨(생성 단계를 총괄 지휘하는 역할이기 때문). 문제가 되는 건 `Detection/` 내부 코드가 config를 보는 것이므로 `main.py`에서는 고려하지 않아도 됨.
 
@@ -69,12 +71,52 @@
 - `save_final_dataset(df, out_dir)`: `DataSet/`에 csv/parquet과 `.meta.json`(지문 포함) 저장.
 - `generate_final_dataset()`: `build_dataset()` 호출해서 새로 dataset 생성.
 - `get_or_generate_final_dataset()`: 저장된 dataset의 지문이 현재와 같으면 재사용, 다르면 `generate_final_dataset()` 재호출(캐싱 로직 본체).
-- `run_final()`: dataset 확보 → `load_tuned_hyperparams()`로 tune 결과 있으면 반영 → `train_model()`/`evaluate(pr_auc_method="average_precision")` → 최종 성능 출력. Track B/C 모델 비교이므로 `average_precision_score` 사용.
+- `run_final(split_for_calibration=None, apply_calibrator=None)`: dataset 확보 → `load_tuned_hyperparams()`로 tune 결과 있으면 반영 → `train_model()`/`evaluate(pr_auc_method="average_precision")` → 최종 성능 출력. Track B/C 모델 비교이므로 `average_precision_score` 사용. 두 파라미터는 각각 `None`이면 모듈 상단 `CALIBRATION_SPLIT_TRAIN`/`CALIBRATION_APPLY` 상수(기본 둘 다 `True`)를 따름 — 자세한 내용은 아래 "confidence calibration(A/B/C 분리)" 참고.
+- `run_final_calibration_compare()`(2026-09-23 추가): `run_final()`을 A/B/C 세 버전으로 실행해서 Track B/C별 스칼라 지표를 비교하고 `calibration_results/final_calibration_compare.json`에 저장.
 - `run_sensitivity_mode()`/`run_sensitivity_ratio_mode()`/`run_sensitivity_each_feature_mode()`/`run_stress_mode()`: 각각 `sensitivity_analysis.py`의 `run_sensitivity()`/`run_stress_sensitivity()`를 다른 파라미터 조합으로 호출.
 - `run_ablation_mode()`: `feature_ablation.py::run_feature_selection_pipeline()` 호출
 - `run_ablation_stability_mode()`: `feature_ablation.py::run_stability_check()` 호출(`ABLATION_STABILITY_K`, `ABLATION_STABILITY_FEATURE_SETS` 사용).
 - `load_tuned_hyperparams(out_dir)`: `optuna_results/best_params.json`이 있으면 읽어서 `(model_type, hyperparams)` 반환, 없으면 `(None, None)`.
 - `run_tuning_mode()`: `optuna_apply.py::run_optuna_tuning_and_compare()` 호출 후 결과 저장.
+
+#### confidence calibration(A/B/C 분리) — `run_final()`/`calib_compare` 모드
+
+**배경**: `-m final`이 XGBoost 원본 확률(`scale_pos_weight`로 불균형 보정된 값)을 그대로 쓰던 것에, 팀원(다은 님)이 `CalibratedClassifierCV`(isotonic) 기반 confidence calibration을 추가함(2026-09-23, `calibration 추가`/`기존 train_eval에 calibration을 추가`/`calibration confidence 평가지표` 3개 커밋). 처음엔 `train_eval.py`를 통째로 복사한 `train_eval_cali.py`라는 별도 파일로 구현되어 있었는데, `main.py`/`eval_confidence.py`만 이 fork를 쓰고 나머지 전부(`sensitivity_analysis.py`, `feature_ablation.py`, `borderline_recheck.py`, `url_reliability_recheck.py`, `optuna_apply.py`, `plot_curve.py`)는 원본 `train_eval.py`를 쓰는 상태였음 — 앞으로 `train_eval.py`에 fix가 들어가도(예: `pr_auc_method` 수정) fork에는 자동 반영 안 되는 구조적 위험이 있어, calibrator 관련 코드를 전부 `train_eval.py`에 통합하고 `train_eval_cali.py`는 삭제함(아래 "`Detection/train_eval.py`" 섹션 참고).
+
+**왜 A/B/C로 나눠서 봐야 하는가**: calibration을 켜려면 `train_set`(70%)을 다시 `train_sub`(모델 학습용)/`val_calib`(calibrator 적합용, `CALIBRATION_VAL_SIZE` 비율)로 나눠야 함 — 즉 calibration을 켜는 순간 "calibration이 적용된다"는 변화와 "모델이 더 적은 데이터로 학습된다"는 변화가 **동시에** 일어남. 그래서 calibration 적용 전/후를 그냥 통째로 비교하면 지표 차이가 어느 쪽 때문인지 알 수 없음 → 아래처럼 버전을 3개로 쪼개서, 비교를 2단계로 나눔:
+
+| 버전 | `split_for_calibration` | `apply_calibrator` | 학습 데이터 | calibrator |
+|---|---|---|---|---|
+| A(원본) | False | False | `train_set` 100% | 없음 |
+| B(데이터만 축소) | True | False | `train_sub`(C와 동일 크기) | 없음 |
+| C(calibration 적용, 현재 운영 방식) | True | True | `train_sub` | 있음 |
+
+- **비교1 = B − A**: calibration은 둘 다 없고 학습 데이터 크기만 다름 → 순수 "학습 데이터가 줄어든 효과"만 분리.
+- **비교2 = C − B**: 학습 데이터(`train_sub`)는 완전히 동일하고 calibration 유무만 다름 → 순수 "calibration 자체 효과"만 분리.
+- (`split_for_calibration=False`, `apply_calibrator=True` 조합은 calibrator를 적합할 `val_calib`이 없어 `ValueError`.)
+
+**흐름**:
+```
+run_final(split_for_calibration, apply_calibrator)
+│
+├─ get_or_generate_final_dataset() → prepare_categorical() → split_data()   (A/B/C 공통)
+│
+├─ [분기①] train_sub / val_calib 결정
+│    split_for_calibration=False → train_sub=train_set(100%), val_calib=None        → 버전 A
+│    split_for_calibration=True  → train_sub≈train_set×(1-CALIBRATION_VAL_SIZE),
+│                                    val_calib=나머지                                → 버전 B, C
+│
+├─ load_tuned_hyperparams()   (공통)
+│
+└─ TRACK_SCENARIOS(B, C) 각각:
+     ├─ model = train_model(train_sub, ...)     ← 분기①의 train_sub를 그대로 씀
+     ├─ [분기②] calibrator 결정
+     │    apply_calibrator=False → calibrator=None                                  → 버전 A, B
+     │    apply_calibrator=True  → calibrator=fit_calibrator(model, val_calib, ...)  → 버전 C
+     └─ evaluate(model, test_set, threshold_df=train_sub, calibrator=calibrator)
+          └─ calibrator가 있으면 calibrator.predict_proba(), 없으면 model.predict_proba()로 확률 산출
+             (threshold 탐색·최종 평가 둘 다 동일하게 적용)
+```
 
 ---
 
@@ -171,9 +213,27 @@
 - `pr_auc(y, proba)`: PR-AUC를 `precision_recall_curve()`+`auc()`(사다리꼴 적분)로 계산. `evaluate()`의 기본값(`pr_auc_method="trapezoidal"`)이 이 함수를 씀.
 - `lift_at_top_k(y, proba, k=0.05)`: 상위 k% Lift 계산.
 - `train_model(df, val=None, feature_cols=None, hyperparams=None, model_type="XGBoost")`: `model_type`에 따라 XGBoost/LightGBM 분기 학습. `hyperparams` 전달 시 Optuna tune 결과 반영.
-- `evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="trapezoidal")`: 학습된 모델을 평가. `threshold_df`를 별도로 받아 "임계값 결정에 test_set을 쓰지 않는" 낙관 편향 방지 구조. `pr_auc_method`(2026-09-19 추가)는 `"trapezoidal"`(기본, `pr_auc()`)과 `"average_precision"`(`average_precision_score()`, 직선 보간 편향이 없어 모델/조합 비교에 더 적합) 중 선택 — `sensitivity_analysis.py`는 기본값(사다리꼴, 상대적 우열 비교 목적)을 그대로 쓰고, `feature_ablation.py`와 `main.py::run_final()`은 `"average_precision"`을 명시적으로 넘김(아래 각 섹션 참고).
+- `evaluate(model, df, feature_cols=None, threshold_df=None, pr_auc_method="trapezoidal", calibrator=None)`: 학습된 모델을 평가. `threshold_df`를 별도로 받아 "임계값 결정에 test_set을 쓰지 않는" 낙관 편향 방지 구조. `pr_auc_method`(2026-09-19 추가)는 `"trapezoidal"`(기본, `pr_auc()`)과 `"average_precision"`(`average_precision_score()`, 직선 보간 편향이 없어 모델/조합 비교에 더 적합) 중 선택 — `sensitivity_analysis.py`는 기본값(사다리꼴, 상대적 우열 비교 목적)을 그대로 쓰고, `feature_ablation.py`와 `main.py::run_final()`은 `"average_precision"`을 명시적으로 넘김(아래 각 섹션 참고). `calibrator`(2026-09-23 추가)를 넘기면 threshold 탐색·최종 평가 모두 `model.predict_proba()` 대신 `calibrator.predict_proba()`로 확률을 뽑음 — `None`(기본값)이면 기존과 완전히 동일(하위 호환).
+- `fit_calibrator(model, val_df, feature_cols, target_col="is_phishing", method="isotonic")`(2026-09-23 추가): 이미 학습된 `model`을 `scale_pos_weight`로 왜곡된 확률 대신 실제 발생 빈도에 가까운 확률로 재정렬하는 `CalibratedClassifierCV`를 적합해서 반환. `val_df`는 `model` 학습에 안 쓰인 데이터여야 함(같은 데이터로 보정하면 과적합까지 "잘 보정된 것"처럼 왜곡됨). scikit-learn 1.6+에서는 `FrozenEstimator`로 이미 학습된 `model`을 그대로 감싸서 보정(재학습 없음), 1.6 미만이라 `FrozenEstimator`가 없으면 `cv="prefit"`으로 fallback — **주의**: 이 fallback에 `cv=None`을 쓰면(과거 실제로 있었던 버그) "prefit 모델을 그대로 써라"가 아니라 "기본 K-fold로 model을 처음부터 다시 학습해라"는 뜻이 되어버려 조용히 다른(잘못된) 동작을 하므로 반드시 `"prefit"`이어야 함.
+
+**연혁**: 이 calibrator 관련 코드는 원래 `train_eval.py`를 통째로 복사한 별도 파일(`train_eval_cali.py`)에 있었음(2026-09-23, 팀원 다은 님 작성). `main.py`/`eval_confidence.py`만 그 fork를 쓰고 나머지 전부는 원본 `train_eval.py`를 쓰는 상태라 두 파일이 서서히 어긋날 위험이 있었음 → 같은 날 `train_eval.py`에 통합하고 `train_eval_cali.py`는 삭제(`fit_calibrator`도 이 파일로 이동, `cv=None` fallback 버그도 이때 같이 고침).
 
 **이 파일은 `Generation/config.py`를 import하지 않아야 함.** 
+
+---
+
+### `Detection/eval_confidence.py`
+
+역할: `-m final`(Track C)이 실제로 confidence calibration이 필요할 만큼 확률이 왜곡되어 있는지, 그리고 calibration 적용 후 실제로 개선되는지를 ECE(Expected Calibration Error)와 reliability diagram으로 진단하는 스크립트. `main.py`의 파이프라인 모드가 아니라 별도 실행 스크립트.
+
+CLI 모드가 아니라 `python -X utf8 -m Simulator.Detection.eval_confidence`로 실행.
+
+하는 일:
+- Track C(21개) 기준으로 `train_sub`(80%)/`val_calib`(20% — `run_final()`의 `CALIBRATION_VAL_SIZE`=0.3과는 다른 비율이므로 직접 비교 시 주의)로 나눠 모델 학습 + `fit_calibrator()`로 isotonic 보정기 적합.
+- `compute_ece(y_true, proba, n_bins=10)`: quantile 전략으로 10-bin calibration curve를 만들고, bin별 (예측확률-실제비율) 차이의 평균을 ECE로 계산. `ece < 0.005`면 "최적 정렬", 아니면 `gap_mean` 부호로 과신(overconfidence)/과소신(underconfidence) 진단.
+- 보정 전(raw XGBoost)/후(isotonic) ECE를 나란히 출력하고, reliability diagram(대각선=이상적 보정선, 두 곡선=보정 전/후)을 `calibration_results/reliability_diagram.png`로 저장.
+
+**이 파일은 `Generation/config.py`를 import하지 않아야 함.**
 
 ---
 
@@ -366,30 +426,35 @@ CLI 모드가 아니라 `python -X utf8 -m Simulator.Detection.url_reliability_r
 - 구간별 하락폭(F1 −0.029/−0.012/−0.005/−0.006)을 보면 전체 하락의 절반 이상이 **가장 약한 단계(mild, 5%만 흐림)**에서 이미 발생 — "극단값에서만 위험하다"가 아니라 "mild(baseline보다 현실적인 가정)에서 이미 우위를 상당히 잃는다"로 해석해야 함.
 - FN이 11.8→25.2건(약 2.1배)으로 늘어나는 게, F1 하락폭(~5pt)보다 이 프로젝트의 평가 기준(FN 비용 > FP 비용)에 더 부합하는 요약임.
 
-**② 성능(K-fold, Track C 21개 기준, `url_reliability_recheck.py` 1단계)**:
+**② 성능(K-fold, Track C 21개 기준, `url_reliability_recheck.py` 1단계, 2026-09-23 하이퍼파라미터·PR-AUC 방식 통일 후 재실행)**:
 
 | level | F1 | PR-AUC | Recall | FN(평균) |
 |---|---|---|---|---|
-| baseline | 0.955±0.003 | 0.977±0.001 | 0.936 | 12.6 |
-| mild | 0.928±0.003 | 0.962±0.002 | 0.902 | 19.4 |
-| moderate | 0.921±0.005 | 0.955±0.004 | 0.891 | 21.6 |
-| strong | 0.912±0.007 | 0.950±0.005 | 0.880 | 23.6 |
-| extreme | 0.910±0.008 | 0.946±0.006 | 0.876 | 24.4 |
+| baseline | 0.957±0.002 | 0.976±0.001 | 0.940 | 11.8 |
+| mild | 0.927±0.004 | 0.962±0.003 | 0.912 | 17.4 |
+| moderate | 0.919±0.005 | 0.955±0.004 | 0.885 | 22.8 |
+| strong | 0.911±0.007 | 0.949±0.005 | 0.879 | 23.8 |
+| extreme | 0.909±0.008 | 0.946±0.006 | 0.876 | 24.4 |
 
-①(전체 25개)과 방향·패턴이 거의 동일함(baseline→mild 구간에서 하락 대부분 발생, FN이 baseline 대비 약 2배로 증가) — **스코프를 Track C로 좁혀도 결론이 바뀌지 않음**을 확인.
+①(전체 25개)과 방향·패턴이 거의 동일함(baseline→mild 구간에서 하락 대부분 발생, FN이 baseline 대비 약 2배로 증가) — **스코프를 Track C로 좁혀도 결론이 바뀌지 않음**을 확인. (이전 기록치와 소수점 둘째~셋째 자리 수준 차이가 있는데, 이 표는 애초부터 기본 하이퍼파라미터+사다리꼴만 썼던 단계라 방법론 변경 때문이 아니라 `tree_method="hist"`의 실행 간 비결정성 때문임 — Track A/B/C 비교 한계에서 이미 확인된 현상과 동일)
 
-**② permutation importance 재검증(`url_reliability_recheck.py` 2단계, Track C 21개 기준)**:
+**② permutation importance 재검증(`url_reliability_recheck.py` 2단계, Track C 21개 기준, 2026-09-23 재실행 — 1단계와 동일하게 기본 하이퍼파라미터+사다리꼴 PR-AUC로 통일)**:
 
 | feature | baseline | mild | moderate | strong | extreme | 판정 |
 |---|---|---|---|---|---|---|
-| `is_reliable_url` | 0.1492 | 0.0347 | 0.0112 | 0.0014 | 0.0004 | (기준) 확실히 붕괴 |
-| `msg_number_official_match` | 0.0372 | 0.0783 | 0.0893 | 0.0983 | 0.0916 | **진짜 대체 확인**(약 2.5배) |
-| `is_sequential_callers` | 0.0208 | 0.0298 | 0.0326 | 0.0401 | 0.0430 | **진짜 대체 확인**(약 2배) |
-| `has_appinstall_link` | 0.00003 | 0.0030 | 0.0052 | 0.0072 | 0.0108 | 오르나 절대값 미미(≤0.011) |
-| `structural_phishing_score` | 0.0064 | 0.0116 | 0.0082 | 0.0206 | 0.0083 | 추세 없음(extreme≈baseline) |
-| `cold_contact` | 0.0037 | 0.0074 | 0.0028 | 0.0032 | 0.0021 | 대체 안 됨(오히려 baseline보다 낮게 끝남) |
+| `is_reliable_url` | 0.2916 | 0.0543 | 0.0162 | 0.0010 | 0.0003 | (기준) 확실히 붕괴 |
+| `msg_number_official_match` | 0.0395 | 0.1047 | 0.1391 | 0.1244 | 0.1176 | **진짜 대체 확인**(baseline 대비 약 3배) |
+| `is_sequential_callers` | 0.0198 | 0.0297 | 0.0360 | 0.0391 | 0.0405 | **진짜 대체 확인**(baseline 대비 약 2배, 단조 증가) |
+| `has_appinstall_link` | 0.00001 | 0.0051 | 0.0062 | 0.0071 | 0.0105 | 오르나 절대값 미미(≤0.011) |
+| `structural_phishing_score` | 0.0090 | 0.0106 | 0.0143 | 0.0220 | 0.0051 | 추세 불안정(strong에서 peak 후 extreme서 급락) |
+| `cold_contact` | 0.0011 | 0.0067 | 0.0034 | 0.0060 | 0.0035 | 값 작고 추세 불안정 — 유의미한 대체 아님 |
 
-**결론**: gain만 보면 5개 후보 전부 credit이 옮겨간 것처럼 보이지만, permutation으로 재확인하면 **`msg_number_official_match`/`is_sequential_callers` 2개만 실제 대체가 확인**되고 나머지 3개는 gain의 착시. Track C 21개 기준으로도 F1이 baseline 0.9378→extreme 0.8969로 같은 "초반 급락 후 정체" 패턴이 재현되어, 전체 feature set 기준 결과와 방향이 일치함(스코프 차이로 인한 결론 변화 없음).
+튜닝된 하이퍼파라미터로 실행했던 이전 버전과 비교하면(구체 수치는 본문 원본 대신 이 표로 대체됨):
+- **핵심 결론(2/5만 진짜 대체)은 하이퍼파라미터를 바꿔도 그대로 유지됨** — `msg_number_official_match`/`is_sequential_callers`만 baseline 대비 2~3배로 뚜렷하게 오르고, 나머지 3개는 여전히 절대값이 작거나(`has_appinstall_link`) 추세가 불안정함(`structural_phishing_score`, `cold_contact`). 두 하이퍼파라미터 설정에서 같은 결론이 나온다는 것 자체가 이 결론이 하이퍼파라미터 선택의 우연한 산물이 아님을 보여줌.
+- 다만 `is_reliable_url` 자체의 baseline permutation importance는 튜닝된 하이퍼파라미터(0.153)보다 기본 하이퍼파라미터(0.292)에서 거의 2배 더 높게 나옴 — 튜닝된 모델은 여러 feature에 신호를 더 고르게 분산시키는 반면, 기본 하이퍼파라미터 모델은 `is_reliable_url` 하나에 더 강하게 의존한다는 뜻. 두 경우 모두 baseline에서 `is_reliable_url`이 Track C 21개 중 가장 중요한 단일 feature라는 방향성은 동일함.
+- `cold_contact`는 이전 실행에서 "extreme이 baseline보다 낮게 끝남"이라고 기록했으나, 이번 재실행에서는 반대 방향(extreme 0.0035 > baseline 0.0011)이 나옴 — 값 자체가 노이즈 수준(0.001~0.007)이라 방향을 특정하는 서술은 부정확했고, "작고 불안정해서 유의미한 대체로 보기 어렵다" 정도로만 해석하는 게 맞음.
+
+**결론**: gain만 보면 5개 후보 전부 credit이 옮겨간 것처럼 보이지만, permutation으로 재확인하면 **`msg_number_official_match`/`is_sequential_callers` 2개만 실제 대체가 확인**되고 나머지 3개는 gain의 착시 — 이 결론은 하이퍼파라미터를 기본값으로 바꿔도 재현됨. 또한 baseline에서 gain(0.36)과 permutation(0.29) 모두 `is_reliable_url`을 Track C 21개 중 최상위로 꼽아 "Track C의 우위가 이 가정 하나에 상당히 의존한다"는 그림도 재확인됨. Track C 21개 기준 F1은 baseline 0.9466→extreme 0.8961(약 −5.3%p)로, 전체 feature set 기준(①) 결과와 "mild 단계에서 이미 하락 대부분 발생 후 정체"라는 패턴이 일치함(스코프·하이퍼파라미터 차이로 인한 결론 변화 없음).
 
 ---
 
@@ -424,6 +489,7 @@ CLI 모드가 아니라 `python -X utf8 -m Simulator.Detection.url_reliability_r
 | `optuna_results/` | tune 모드 결과 json(`best_params.json` — winner 모델+하이퍼파라미터). | `.gitignore` 처리 |
 | `borderline_recheck_results/` | `-m final` 경계선 재확인 json(`borderline_recheck.json` — 약한 파생 제거 비교, `is_global` 빈도, permutation importance). | `.gitignore` 처리 |
 | `url_reliability_recheck_results/` | `is_reliable_url` stress 재검증 json(`url_reliability_recheck.json` — Track C 21개 기준, 레벨별 gain/permutation importance). | `.gitignore` 처리 |
+| `calibration_results/` | confidence calibration 관련 산출물 — `reliability_diagram.png`(`eval_confidence.py`), `final_calibration_compare.json`(`calib_compare` 모드, A/B/C 비교). | `.gitignore` 처리 |
 
 ---
 
